@@ -1,0 +1,1034 @@
+// Enosis Lead CRM — data model
+//
+// Conventions
+// - Built-in properties live in typed columns; admin-created (custom) properties
+//   live in the `properties` jsonb column (GIN indexed) so they can be filtered
+//   and sorted without migrations. `PropertyDefinition` describes both kinds.
+// - Status-like values (lifecycle stage, lead status, lead state, call status…)
+//   are plain strings whose allowed values come from `PropertyDefinition.options`,
+//   so admins can edit them without a migration.
+// - Layouts, views, chips, pipelines, automations and dashboards are data.
+// - Records are soft-deleted (`deletedAt`) and restorable for 90 days.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres"]
+}
+
+datasource db {
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+// ─────────────────────────────── Enums ───────────────────────────────
+
+enum ObjectType {
+  CONTACT
+  COMPANY
+  DEAL
+  ACTIVITY
+  PHONE_NUMBER
+}
+
+enum ActivityType {
+  NOTE
+  EMAIL
+  CALL
+  TASK
+  MEETING
+  SYSTEM
+}
+
+enum PropertyType {
+  TEXT
+  TEXTAREA
+  RICH_TEXT
+  NUMBER
+  DATE
+  DATETIME
+  ENUM // dropdown
+  MULTI_ENUM // multi-select
+  RADIO
+  BOOLEAN
+  USER
+  PHONE
+  EMAIL
+  URL
+  FILE
+  CALCULATED
+  AUTO_NUMBER
+}
+
+enum Visibility {
+  PRIVATE
+  TEAM
+  EVERYONE
+}
+
+enum StageType {
+  OPEN
+  WON
+  LOST
+}
+
+enum SegmentType {
+  ACTIVE
+  STATIC
+}
+
+enum TaskStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  WAITING
+  COMPLETED
+}
+
+enum EmailDirection {
+  INBOUND
+  OUTBOUND
+}
+
+// ─────────────────────── Users, teams, permissions ───────────────────────
+
+model User {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  name        String?
+  image       String?
+  roleId      String?
+  role        Role?     @relation(fields: [roleId], references: [id])
+  isActive    Boolean   @default(true)
+  // Personal preferences (§7A-K): timezone, dateFormat, theme, homePage, notifications…
+  preferences Json      @default("{}")
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  teams           TeamMember[]
+  ownedContacts   Contact[]      @relation("ContactOwner")
+  ownedCompanies  Company[]      @relation("CompanyOwner")
+  ownedDeals      Deal[]         @relation("DealOwner")
+  ownedActivities Activity[]     @relation("ActivityOwner")
+  assignedTasks   Activity[]     @relation("ActivityAssignee")
+  savedViews      SavedView[]
+  segments        Segment[]
+  notifications   Notification[]
+  recentViews     RecentView[]
+  auditLogs       AuditLog[]
+  uiState         UserUiState[]
+  importJobs      ImportJob[]
+  dashboards      Dashboard[]
+  researching     Company[]         @relation("CompanyResearcher")
+  ownedCampaigns  Campaign[]        @relation("CampaignOwner")
+  campaignWork    CampaignCompany[] @relation("CampaignAssignee")
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique // Admin, Manager, Caller, Researcher
+  description String?
+  // { contacts: { visibility: "ALL"|"TEAM"|"OWN", delete, export, bulkEdit, import }, settings: { edit } … }
+  permissions Json     @default("{}")
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  users       User[]
+}
+
+model Team {
+  id        String         @id @default(cuid())
+  name      String         @unique
+  createdAt DateTime       @default(now())
+  members   TeamMember[]
+  layouts   RecordLayout[]
+  views     SavedView[]
+}
+
+model TeamMember {
+  teamId    String
+  userId    String
+  isManager Boolean @default(false)
+  team      Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([teamId, userId])
+}
+
+// ─────────────────────────────── Company ───────────────────────────────
+
+model Company {
+  id              String    @id @default(cuid())
+  name            String
+  domain          String?   @unique
+  linkedinUrl     String?
+  email           String?
+  phone           String?
+  // Location
+  country         String?
+  state           String?
+  city            String?
+  timeZone        String? // IANA, e.g. "America/Chicago"
+  // Firmographics
+  industry        String?
+  employees       Int?
+  employeeGrowth  Float?
+  investmentInfo  String?
+  foundedYear     Int?
+  annualRevenue   Decimal?  @db.Decimal(18, 2)
+  offerType       String? // Product / Service
+  // Tech
+  technologies    String[]
+  // Research text
+  description     String?
+  servicesOrApps  String?
+  careerPageUrl   String?
+  pitchNotes      String?
+  // Campaign
+  listSource      String? // e.g. "Directory - Capterra"
+  source          String?
+  campaign        String?
+  batchNumber     String?
+  tags            String[]
+  // Lifecycle
+  ownerId         String?
+  owner           User?     @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  lifecycleStage  String?
+  leadStatus      String?
+  // Lead journey stage (Sourced → Researching → … → Customer, or an exit stage); history in JourneyEvent
+  leadState       String?
+  leadStateAt     DateTime?
+  lastActivityAt  DateTime?
+  lastContactedAt DateTime?
+  nextFollowUpAt  DateTime?
+  // Research
+  researchStatus  String? // Not started / In progress / Needs more info / Done
+  researcherId    String?
+  researcher      User?     @relation("CompanyResearcher", fields: [researcherId], references: [id], onDelete: SetNull)
+  researchedAt    DateTime?
+  // Company-level calling rollups (all calls to the company or its contacts)
+  callStatus      String?
+  crtCount        Int       @default(0)
+  connectedCount  Int       @default(0)
+  lastCallAt      DateTime?
+  // Buying-signal rollups
+  signalTypes     String[]
+  lastSignalAt    DateTime?
+  lastEnrichedAt  DateTime?
+  // Custom properties
+  properties      Json      @default("{}")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+  createdById     String?
+
+  contacts      ContactCompany[]
+  phoneNumbers  PhoneNumber[]
+  deals         DealCompany[]
+  activities    ActivityCompany[]
+  segments      SegmentMember[]
+  journeyEvents JourneyEvent[]
+  signals       BuyingSignal[]
+  campaigns     CampaignCompany[]
+  enrichments   EnrichmentRun[]
+
+  @@index([name])
+  @@index([ownerId])
+  @@index([lifecycleStage])
+  @@index([leadStatus])
+  @@index([leadState])
+  @@index([researcherId])
+  @@index([campaign])
+  @@index([country])
+  @@index([deletedAt])
+  @@index([properties(ops: JsonbPathOps)], type: Gin)
+}
+
+// ─────────────────────────────── Contact ───────────────────────────────
+
+model Contact {
+  id                    String    @id @default(cuid())
+  firstName             String?
+  lastName              String?
+  jobTitle              String?
+  seniority             String?
+  department            String?
+  email                 String?
+  phone                 String?
+  mobile                String?
+  linkedinUrl           String?
+  city                  String?
+  country               String?
+  timeZone              String?
+  inDbnd                String? // yes / no / unknown
+  interestLevel         String?
+  outsourcingExperience String?
+  doNotCall             Boolean   @default(false)
+  ownerId               String?
+  owner                 User?     @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  lifecycleStage        String?
+  leadStatus            String?
+  leadState             String?
+  campaign              String?
+  callable              String? // Yes / No
+  // Calling rollups (maintained when calls are logged)
+  callStatus            String? // Never Reached Targets / Reached Gatekeeper / Reached Target …
+  crtCount              Int       @default(0)
+  connectedCount        Int       @default(0)
+  lastCallAt            DateTime?
+  lastContactedAt       DateTime?
+  lastActivityAt        DateTime?
+  nextFollowUpAt        DateTime?
+  properties            Json      @default("{}")
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  deletedAt             DateTime?
+  createdById           String?
+
+  companies     ContactCompany[]
+  phoneNumbers  PhoneNumber[]
+  deals         DealContact[]
+  activities    ActivityContact[]
+  callsTargeted Activity[]        @relation("CallTargetContact")
+  segments      SegmentMember[]
+
+  @@index([email])
+  @@index([lastName, firstName])
+  @@index([ownerId])
+  @@index([lifecycleStage])
+  @@index([leadStatus])
+  @@index([campaign])
+  @@index([callStatus])
+  @@index([createdAt])
+  @@index([lastActivityAt])
+  @@index([deletedAt])
+  @@index([properties(ops: JsonbPathOps)], type: Gin)
+}
+
+model ContactCompany {
+  contactId String
+  companyId String
+  isPrimary Boolean  @default(false)
+  labels    String[] // Decision maker, Gatekeeper, Champion…
+  createdAt DateTime @default(now())
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, companyId])
+  @@index([companyId])
+}
+
+// ───────────────────────────── Phone number ─────────────────────────────
+
+model PhoneNumber {
+  id           String     @id @default(cuid())
+  number       String // E.164
+  extension    String?
+  type         String     @default("Main") // Main / Direct / Mobile / Sales / Operator
+  ivrPath      String? // "DBND 9, Sales 1, OPT 0"
+  status       String     @default("Unknown") // Valid / Temp Busy / Wrong / Disconnected / Unknown
+  lastDialedAt DateTime?
+  notes        String?
+  companyId    String?
+  contactId    String?
+  company      Company?   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contact      Contact?   @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  calls        Activity[] @relation("CallPhoneNumber")
+
+  @@index([number])
+  @@index([companyId])
+  @@index([contactId])
+}
+
+// ─────────────────────────────── Activity ───────────────────────────────
+
+model Activity {
+  id         String       @id @default(cuid())
+  type       ActivityType
+  ownerId    String?
+  owner      User?        @relation("ActivityOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  assigneeId String?
+  assignee   User?        @relation("ActivityAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  occurredAt DateTime     @default(now())
+  title      String?
+  body       String? // rich text (HTML) for notes / call notes / meeting notes
+
+  // Call
+  phoneNumberId   String?
+  phoneNumber     PhoneNumber? @relation("CallPhoneNumber", fields: [phoneNumberId], references: [id], onDelete: SetNull)
+  dialedNumber    String? // raw number as dialed (kept even if PhoneNumber row is removed)
+  targetContactId String?
+  targetContact   Contact?     @relation("CallTargetContact", fields: [targetContactId], references: [id], onDelete: SetNull)
+  callPath        String? // Direct / OPT / DBND / Transferred
+  callResult      String? // VM, No Answer, Temp Busy, Gatekeeper…
+  gatekeeperType  String?
+  durationSec     Int?
+  followUpEmailTo String?
+
+  // Email (logged manually in v1)
+  subject        String?
+  emailTo        String[]
+  emailCc        String[]
+  emailDirection EmailDirection?
+
+  // Task
+  dueAt       DateTime?
+  taskType    String? // Call / Email / Research / To-do
+  priority    String? // Low / Medium / High
+  taskStatus  TaskStatus?
+  reminderAt  DateTime?
+  completedAt DateTime?
+  queueId     String?
+  queue       TaskQueue?  @relation(fields: [queueId], references: [id], onDelete: SetNull)
+
+  // Meeting
+  startAt        DateTime?
+  endAt          DateTime?
+  attendees      String[]
+  location       String?
+  meetingType    String?
+  meetingOutcome String?
+
+  // System event: { kind: "property_change"|"stage_change"|"created"|"imported", property, from, to, source }
+  systemData Json?
+
+  // Campaign the activity was logged for (calls made while working a campaign)
+  campaignId String?
+  campaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  // Free-form extra data / custom activity properties
+  properties Json      @default("{}")
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  contacts  ActivityContact[]
+  companies ActivityCompany[]
+  deals     ActivityDeal[]
+
+  @@index([type, occurredAt])
+  @@index([campaignId])
+  @@index([assigneeId, dueAt])
+  @@index([ownerId])
+  @@index([callResult])
+  @@index([deletedAt])
+}
+
+model ActivityContact {
+  activityId String
+  contactId  String
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  contact    Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([activityId, contactId])
+  @@index([contactId])
+}
+
+model ActivityCompany {
+  activityId String
+  companyId  String
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@id([activityId, companyId])
+  @@index([companyId])
+}
+
+model ActivityDeal {
+  activityId String
+  dealId     String
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  deal       Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@id([activityId, dealId])
+  @@index([dealId])
+}
+
+model TaskQueue {
+  id        String     @id @default(cuid())
+  name      String
+  ownerId   String? // null = shared
+  shared    Boolean    @default(false)
+  createdAt DateTime   @default(now())
+  tasks     Activity[]
+}
+
+// ──────────────────────────── Deals & pipelines ────────────────────────────
+
+model Pipeline {
+  id         String          @id @default(cuid())
+  name       String
+  objectType ObjectType      @default(DEAL)
+  order      Int             @default(0)
+  // Optional rules: { blockBackward: bool, requireLostReason: bool }
+  settings   Json            @default("{}")
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+  stages     PipelineStage[]
+  deals      Deal[]
+}
+
+model PipelineStage {
+  id                 String    @id @default(cuid())
+  pipelineId         String
+  pipeline           Pipeline  @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  name               String
+  color              String // hex
+  order              Int
+  probability        Int       @default(0) // 0–100
+  stageType          StageType @default(OPEN)
+  requiredProperties String[] // property names required on entering the stage
+  deals              Deal[]
+
+  @@index([pipelineId, order])
+}
+
+model Deal {
+  id             String        @id @default(cuid())
+  name           String
+  amount         Decimal?      @db.Decimal(18, 2)
+  closeDate      DateTime?
+  ownerId        String?
+  owner          User?         @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  pipelineId     String
+  pipeline       Pipeline      @relation(fields: [pipelineId], references: [id])
+  stageId        String
+  stage          PipelineStage @relation(fields: [stageId], references: [id])
+  dealType       String? // Staff Augmentation / Project / Product Dev
+  sourceCampaign String?
+  lostReason     String?
+  lastActivityAt DateTime?
+  properties     Json          @default("{}")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  deletedAt      DateTime?
+
+  contacts   DealContact[]
+  companies  DealCompany[]
+  activities ActivityDeal[]
+
+  @@index([pipelineId, stageId])
+  @@index([ownerId])
+  @@index([deletedAt])
+  @@index([properties(ops: JsonbPathOps)], type: Gin)
+}
+
+model DealContact {
+  dealId    String
+  contactId String
+  labels    String[]
+  deal      Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([dealId, contactId])
+  @@index([contactId])
+}
+
+model DealCompany {
+  dealId    String
+  companyId String
+  isPrimary Boolean  @default(false)
+  labels    String[]
+  deal      Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@id([dealId, companyId])
+  @@index([companyId])
+}
+
+// ─────────────────────────────── Segments ───────────────────────────────
+
+model Segment {
+  id         String          @id @default(cuid())
+  name       String
+  objectType ObjectType
+  type       SegmentType
+  // Active segments: FilterGroup[] (groups OR'ed, conditions inside a group use the group's op)
+  filters    Json?
+  ownerId    String?
+  owner      User?           @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  visibility Visibility      @default(EVERYONE)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+  members    SegmentMember[]
+}
+
+model SegmentMember {
+  segmentId String
+  recordId  String // Contact / Company / Deal id (matches Segment.objectType)
+  // Typed links so record queries can filter by static-segment membership
+  contactId String?
+  companyId String?
+  addedAt   DateTime @default(now())
+  addedById String?
+  segment   Segment  @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@id([segmentId, recordId])
+  @@index([recordId])
+  @@index([contactId])
+  @@index([companyId])
+}
+
+// ─────────────────────────── Property metadata ───────────────────────────
+
+model PropertyGroup {
+  id         String               @id @default(cuid())
+  objectType ObjectType
+  name       String // internal
+  label      String
+  order      Int                  @default(0)
+  properties PropertyDefinition[]
+
+  @@unique([objectType, name])
+}
+
+model PropertyDefinition {
+  id          String         @id @default(cuid())
+  objectType  ObjectType
+  name        String // internal name; matches column name for built-ins
+  label       String
+  description String?
+  tooltip     String?
+  type        PropertyType
+  groupId     String?
+  group       PropertyGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  order       Int            @default(0)
+  // true → typed column on the model, false → stored in `properties` jsonb
+  isBuiltIn   Boolean        @default(false)
+  // Read-only, computed by the system (CRT count, last activity…)
+  isReadOnly  Boolean        @default(false)
+  // Number format: number / currency / percent
+  format      String?
+  // Options for ENUM / MULTI_ENUM / RADIO: [{ value, label, color, order, archived }]
+  options     Json?
+  // { required: "always"|{ stage|status }, unique, regex, min, max, maxLength }
+  validation  Json?
+  // Dependent property: { property: "leadState", in: ["Disqualified"] }
+  showWhen    Json?
+  // Field-level permissions: { view: [roleName], edit: [roleName] } (empty = everyone)
+  permissions Json?
+  // CALCULATED: { kind: "formula"|"rollup", expression, association, aggregate }
+  calculation Json?
+  archivedAt  DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([objectType, name])
+  @@index([objectType, groupId])
+}
+
+// ────────────────────────────── Index views ──────────────────────────────
+
+model SavedView {
+  id           String     @id @default(cuid())
+  objectType   ObjectType
+  name         String
+  ownerId      String?
+  owner        User?      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  teamId       String?
+  team         Team?      @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  visibility   Visibility @default(PRIVATE)
+  // System tabs: "all" | "mine" | "unassigned"; null for custom views
+  systemKey    String?
+  // Filter tree: { op: "AND"|"OR", groups: [{ op, conditions: [{ property, operator, value, association? }] }] }
+  filters      Json       @default("{}")
+  // [{ property, direction }]
+  sort         Json       @default("[]")
+  // [{ property, width, frozen }]
+  columns      Json       @default("[]")
+  // Pinned quick-filter chip property names
+  quickFilters Json       @default("[]")
+  // Board: { groupBy, cardProperties: [], pipelineId }
+  board        Json       @default("{}")
+  density      String     @default("comfortable")
+  pageSize     Int        @default(25)
+  order        Int        @default(0)
+  isPinned     Boolean    @default(false)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([objectType, ownerId])
+}
+
+// Per-object index defaults (§7A-B): default chips, preview drawer & board card properties
+model ObjectSettings {
+  objectType          ObjectType @id
+  defaultColumns      Json       @default("[]")
+  defaultQuickFilters Json       @default("[]")
+  previewProperties   Json       @default("[]")
+  boardCardProperties Json       @default("[]")
+  // Association card settings: { maxShown, allowed: [ObjectType] }
+  associationSettings Json       @default("{}")
+  updatedAt           DateTime   @updatedAt
+}
+
+// ───────────────────────── Record page layouts ─────────────────────────
+
+model RecordLayout {
+  id         String                @id @default(cuid())
+  objectType ObjectType
+  name       String
+  teamId     String? // null = default layout
+  team       Team?                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  roleName   String?
+  isDefault  Boolean               @default(false)
+  // { left: { keyInfo: [props], cards: [{ id, title, groupId|properties }], quickActions: [] },
+  //   center: { tabs: [{ id, label, hidden, cards: [{ id, kind, title, config }] }] },
+  //   right: { cards: [{ id, kind, title, properties, limit }] } }
+  config     Json
+  version    Int                   @default(1)
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @updatedAt
+  versions   RecordLayoutVersion[]
+
+  @@index([objectType, teamId])
+}
+
+model RecordLayoutVersion {
+  id          String       @id @default(cuid())
+  layoutId    String
+  layout      RecordLayout @relation(fields: [layoutId], references: [id], onDelete: Cascade)
+  version     Int
+  config      Json
+  createdById String?
+  createdAt   DateTime     @default(now())
+
+  @@unique([layoutId, version])
+}
+
+// Per-user UI memory (collapsed cards, last tab…)
+model UserUiState {
+  userId    String
+  key       String // e.g. "record:CONTACT:card:research"
+  value     Json
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, key])
+}
+
+// ───────────────────────── Activity configuration ─────────────────────────
+
+// Editable lists for activities: call outcomes, call paths, meeting types/outcomes,
+// task types, task priorities, gatekeeper types…
+model OptionList {
+  id      String @id @default(cuid())
+  key     String @unique // "callResult", "callPath", "taskType", …
+  label   String
+  // [{ value, label, color, order, archived, meta }]
+  options Json
+}
+
+model FollowUpRule {
+  id         String   @id @default(cuid())
+  callResult String
+  taskTitle  String
+  taskType   String   @default("Call")
+  dueInDays  Int
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+}
+
+model Template {
+  id        String   @id @default(cuid())
+  kind      String // note / email
+  name      String
+  subject   String?
+  body      String // supports {{contact.first_name}} merge fields
+  ownerId   String?
+  shared    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model AssociationLabel {
+  id         String     @id @default(cuid())
+  fromObject ObjectType
+  toObject   ObjectType
+  label      String
+  limit      Int?
+  order      Int        @default(0)
+
+  @@unique([fromObject, toObject, label])
+}
+
+// ─────────────────────────────── Automation ───────────────────────────────
+
+model AutomationRule {
+  id         String     @id @default(cuid())
+  name       String
+  objectType ObjectType
+  isActive   Boolean    @default(true)
+  isSystem   Boolean    @default(false)
+  // { kind: "property_changed"|"record_created"|"activity_logged"|"date_reached", property?, activityType? }
+  trigger    Json
+  // Same condition format as view filters
+  conditions Json       @default("{}")
+  // [{ kind: "set_property"|"create_task"|"assign_owner"|"add_to_segment"|"notify", … }]
+  actions    Json
+  order      Int        @default(0)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+}
+
+// ─────────────────────────── Dashboards & reports ───────────────────────────
+
+model Dashboard {
+  id         String         @id @default(cuid())
+  name       String
+  ownerId    String?
+  owner      User?          @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  visibility Visibility     @default(EVERYONE)
+  teamId     String?
+  isDefault  Boolean        @default(false)
+  filters    Json           @default("{}")
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  widgets    ReportWidget[]
+}
+
+model ReportWidget {
+  id          String    @id @default(cuid())
+  dashboardId String
+  dashboard   Dashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  title       String
+  // { object, filters, groupBy, measure: { op: "count"|"sum"|"avg", property }, chart: "bar"|"line"|"donut"|"table"|"kpi" }
+  config      Json
+  // Grid position { x, y, w, h }
+  layout      Json
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+// ─────────────────────────── Library & campaigns ───────────────────────────
+
+model CaseStudy {
+  id           String   @id @default(cuid())
+  title        String
+  client       String?
+  industry     String?
+  technologies String[]
+  summary      String?
+  url          String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ─────────────────────── Lead journey, signals, campaigns ───────────────────────
+
+// One row per change of a company's lead journey stage (Company.leadState)
+model JourneyEvent {
+  id         String   @id @default(cuid())
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  fromStage  String?
+  toStage    String
+  at         DateTime @default(now())
+  userId     String?
+  // manual / sourcing / research / call / meeting / campaign / deal / import / automation
+  source     String
+  reason     String?
+  campaignId String?
+  activityId String?
+
+  @@index([companyId, at])
+  @@index([toStage, at])
+}
+
+// Buying signal on a company: funding, hiring, leadership change, expansion…
+model BuyingSignal {
+  id          String    @id @default(cuid())
+  companyId   String
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  type        String
+  title       String
+  detail      String?
+  url         String?
+  source      String // Manual research, Apollo.io, LinkedIn…
+  strength    String    @default("Medium") // High / Medium / Low
+  detectedAt  DateTime  @default(now())
+  expiresAt   DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+
+  @@index([companyId])
+  @@index([type, detectedAt])
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+// A calling campaign: a set of companies picked by criteria (ICP, buying signals,
+// call history) and/or by hand, worked by callers, with per-company outcomes.
+model Campaign {
+  id          String         @id @default(cuid())
+  name        String
+  description String?
+  type        String // Buying signal / ICP / Custom set / Re-engagement / Event
+  status      CampaignStatus @default(DRAFT)
+  ownerId     String?
+  owner       User?          @relation("CampaignOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  startDate   DateTime?
+  endDate     DateTime?
+  // Company criteria: FilterGroup[] (same format as segments)
+  criteria    Json           @default("[]")
+  // { autoAdd, requireCallable, excludeExitStages, excludeOtherActive, excludeContactedDays, maxAttempts }
+  settings    Json           @default("{}")
+  // { companies, connects, meetings }
+  goals       Json           @default("{}")
+  // Talking points / pitch for callers
+  pitch       String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  members    CampaignCompany[]
+  activities Activity[]
+
+  @@index([status])
+}
+
+model CampaignCompany {
+  campaignId   String
+  companyId    String
+  // Queued / In progress / Connected / Meeting booked / Not interested / Nurture / Disqualified / Completed
+  status       String    @default("Queued")
+  addedVia     String    @default("manual") // criteria / manual / segment
+  addedAt      DateTime  @default(now())
+  addedById    String?
+  assignedToId String?
+  assignedTo   User?     @relation("CampaignAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  attempts     Int       @default(0)
+  connects     Int       @default(0)
+  lastCallAt   DateTime?
+  lastResult   String?
+  nextActionAt DateTime?
+  notes        String?
+  // Removed members stay as rows so criteria syncs don't add them back
+  removedAt    DateTime?
+  campaign     Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@id([campaignId, companyId])
+  @@index([companyId])
+  @@index([campaignId, status])
+}
+
+// ───────────────────────── Lead-gen & research integrations ─────────────────────────
+
+// Connector settings. API keys are never stored here; they come from env vars (see .env.example).
+model Integration {
+  provider  String    @id // apollo / lusha / …
+  enabled   Boolean   @default(false)
+  // { autoEnrichOnCreate, overwrite, createSignals }
+  settings  Json      @default("{}")
+  lastRunAt DateTime?
+  lastError String?
+  updatedAt DateTime  @updatedAt
+}
+
+model EnrichmentRun {
+  id        String   @id @default(cuid())
+  provider  String
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  status    String // updated / no_change / no_match / failed
+  // { property: { from, to } }
+  changes   Json?
+  error     String?
+  userId    String?
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
+}
+
+// Fields still to be confirmed (open question) → kept flexible
+model EmailCampaign {
+  id         String    @id @default(cuid())
+  name       String
+  status     String?
+  sentAt     DateTime?
+  properties Json      @default("{}")
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+}
+
+// ─────────────────────────── System & data mgmt ───────────────────────────
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  objectType ObjectType?
+  recordId   String?
+  action     String // create / update / delete / restore / merge / import / settings
+  changes    Json? // { property: { from, to } }
+  userId     String?
+  user       User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt  DateTime    @default(now())
+
+  @@index([objectType, recordId])
+  @@index([createdAt])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind      String // task_due / mention / assignment / follow_up
+  title     String
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+}
+
+model RecentView {
+  userId     String
+  objectType ObjectType
+  recordId   String
+  viewedAt   DateTime   @default(now())
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, objectType, recordId])
+  @@index([userId, viewedAt])
+}
+
+model ImportJob {
+  id         String     @id @default(cuid())
+  objectType ObjectType
+  fileName   String
+  status     String // draft / previewed / running / completed / failed
+  mapping    Json       @default("{}")
+  summary    Json?
+  userId     String?
+  user       User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+}
+
+model ImportMappingTemplate {
+  id         String     @id @default(cuid())
+  name       String
+  objectType ObjectType
+  mapping    Json
+  createdAt  DateTime   @default(now())
+}
+
+// Singleton workspace settings (§7A-L branding, §9 AI toggle)
+model WorkspaceSettings {
+  id              String   @id @default("workspace")
+  name            String   @default("Enosis CRM")
+  logoUrl         String?
+  primaryColor    String   @default("#00a4bd")
+  defaultTimeZone String   @default("Asia/Dhaka")
+  aiEnabled       Boolean  @default(false)
+  updatedAt       DateTime @updatedAt
+}

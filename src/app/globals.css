@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+/* Design tokens — HubSpot-style palette. Primary is overridable from workspace branding. */
+:root {
+  --app-bg: #f5f8fa;
+  --surface: #ffffff;
+  --surface-muted: #f5f8fa;
+  --surface-hover: #eaf0f6;
+  --border: #dfe3eb;
+  --border-strong: #cbd6e2;
+  --text: #33475b;
+  --text-muted: #516f90;
+  --text-subtle: #7c98b6;
+  --link: #0091ae;
+  --nav: #213343;
+  --nav-hover: #2e4459;
+  --nav-active: #3b546c;
+  --nav-text: #dbe5ef;
+  --primary: #00806e;
+  --primary-hover: #006b5c;
+  --primary-soft: #e5f5f2;
+  --danger: #d9363e;
+  --danger-soft: #fdedee;
+  --warning-soft: #fef8f0;
+  --focus: #0091ae;
+}
+
+@theme inline {
+  --color-app: var(--app-bg);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-surface-hover: var(--surface-hover);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-ink: var(--text);
+  --color-ink-muted: var(--text-muted);
+  --color-ink-subtle: var(--text-subtle);
+  --color-link: var(--link);
+  --color-nav: var(--nav);
+  --color-nav-hover: var(--nav-hover);
+  --color-nav-active: var(--nav-active);
+  --color-nav-text: var(--nav-text);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-soft: var(--primary-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-warning-soft: var(--warning-soft);
+  --font-sans: var(--font-lexend), ui-sans-serif, system-ui, sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--app-bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+*:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* Thin scrollbars inside tables & panels */
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
