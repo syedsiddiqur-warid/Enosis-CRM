@@ -13,8 +13,9 @@ import { cn } from "@/lib/utils";
 import { DynamicsReview, type ReviewItem } from "./dynamics-review";
 
 const MAX_ROWS = 20000;
-const VALIDATE_CHUNK = 500;
-const IMPORT_CHUNK = 200;
+const VALIDATE_CHUNK = 100;
+// Small batches keep each request well inside serverless time limits (Netlify functions: ~10 s)
+const IMPORT_CHUNK = 50;
 
 type Step = "upload" | "map" | "review" | "running" | "done";
 interface Sheet {

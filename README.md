@@ -23,6 +23,10 @@ The seeded admin is `SEED_ADMIN_EMAIL` (defaults to siddiqur.rahim@enosisbd.com)
 Set `DATABASE_URL` to Neon/Supabase, `AUTH_SECRET`, and Google (`AUTH_GOOGLE_ID/SECRET`) and/or Microsoft Entra ID
 (`AUTH_MICROSOFT_ENTRA_ID_ID/SECRET/ISSUER`) credentials. Only `AUTH_ALLOWED_DOMAIN` emails can sign in. See `.env.example`.
 
+**Netlify:** step-by-step guide in [docs/DEPLOY-NETLIFY.md](docs/DEPLOY-NETLIFY.md) (`netlify.toml`, `npm run build:netlify`
+applies migrations then builds, `npm run db:seed:prod` sets up a workspace without sample data; the seed refuses to
+wipe a non-local database that already has records).
+
 ## How it's built
 
 - **Metadata-driven.** `PropertyDefinition`/`PropertyGroup` describe every property. Built-ins map to typed columns,

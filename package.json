@@ -12,7 +12,10 @@
     "db:migrate": "prisma migrate dev",
     "db:seed": "prisma db seed",
     "db:reset": "prisma migrate reset --force",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "postinstall": "prisma generate",
+    "build:netlify": "prisma migrate deploy && next build",
+    "db:seed:prod": "prisma db seed -- --no-sample-data"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -60,5 +63,8 @@
     "@prisma/client@6.19.3": true,
     "esbuild@0.28.2": true,
     "unrs-resolver@1.12.2": true
+  },
+  "engines": {
+    "node": ">=20.18"
   }
 }

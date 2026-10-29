@@ -1,0 +1,10 @@
+# Netlify: builds the Next.js app (Netlify's Next.js runtime is applied automatically)
+# and applies database migrations first. Environment variables are set in the Netlify UI;
+# see docs/DEPLOY-NETLIFY.md.
+[build]
+  command = "npm run build:netlify"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "22"
+  NEXT_TELEMETRY_DISABLED = "1"

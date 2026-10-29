@@ -27,6 +27,9 @@ const daysAgo = (n: number, h = 10) => new Date(Date.now() - n * 864e5 - h * 36e
 const daysAhead = (n: number) => new Date(Date.now() + n * 864e5);
 
 const ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL ?? "siddiqur.rahim@enosisbd.com";
+/** `npm run db:seed:prod` (--no-sample-data) or SEED_SAMPLE_DATA=false seeds only what a real workspace needs:
+ *  the admin, roles, teams, properties, lists, layouts, pipeline and rules, with no sample people, companies or activity. */
+const SAMPLE_DATA = !process.argv.includes("--no-sample-data") && process.env.SEED_SAMPLE_DATA !== "false";
 const JOURNEY_PATH = LEAD_STATES.filter((o) => o.kind !== "exit").map((o) => o.value);
 
 async function wipe() {
@@ -93,10 +96,14 @@ async function seedUsers() {
 
   const people = [
     { email: ADMIN_EMAIL, name: "Siddiqur Rahim", role: "Admin" },
-    { email: "nadia.islam@enosisbd.com", name: "Nadia Islam", role: "Caller" },
-    { email: "tanvir.ahmed@enosisbd.com", name: "Tanvir Ahmed", role: "Caller" },
-    { email: "farhana.akter@enosisbd.com", name: "Farhana Akter", role: "Researcher" },
-    { email: "rafiq.hasan@enosisbd.com", name: "Rafiq Hasan", role: "Manager" },
+    ...(SAMPLE_DATA
+      ? [
+          { email: "nadia.islam@enosisbd.com", name: "Nadia Islam", role: "Caller" },
+          { email: "tanvir.ahmed@enosisbd.com", name: "Tanvir Ahmed", role: "Caller" },
+          { email: "farhana.akter@enosisbd.com", name: "Farhana Akter", role: "Researcher" },
+          { email: "rafiq.hasan@enosisbd.com", name: "Rafiq Hasan", role: "Manager" },
+        ]
+      : []),
   ];
   const users = [];
   for (const p of people) {
@@ -112,13 +119,19 @@ async function seedUsers() {
   const callers = await db.team.create({ data: { name: "Callers" } });
   const research = await db.team.create({ data: { name: "Research" } });
   await db.teamMember.createMany({
-    data: [
-      { teamId: callers.id, userId: users[1].id },
-      { teamId: callers.id, userId: users[2].id },
-      { teamId: callers.id, userId: users[4].id, isManager: true },
-      { teamId: research.id, userId: users[3].id },
-      { teamId: research.id, userId: users[0].id, isManager: true },
-    ],
+    data: SAMPLE_DATA
+      ? [
+          { teamId: callers.id, userId: users[1].id },
+          { teamId: callers.id, userId: users[2].id },
+          { teamId: callers.id, userId: users[4].id, isManager: true },
+          { teamId: research.id, userId: users[3].id },
+          { teamId: research.id, userId: users[0].id, isManager: true },
+        ]
+      : [
+          // Real teammates are added in Settings → Users & teams
+          { teamId: callers.id, userId: users[0].id, isManager: true },
+          { teamId: research.id, userId: users[0].id, isManager: true },
+        ],
   });
   return { users, teams: { callers, research } };
 }
@@ -1029,11 +1042,31 @@ async function seedRecords(users: { id: string }[]) {
   return { companies: companies.length, contacts: contactCount, segments: [q4.name, staticSeg.name, companySeg.name] };
 }
 
+/** The seed starts by wiping record data. On anything but a local database that already holds
+ *  records, refuse unless SEED_FORCE=true, so a production CRM can't be erased by accident. */
+async function guardRemoteWipe() {
+  const host = (process.env.DATABASE_URL ?? "").replace(/^[a-z+]+:\/\/([^@/]*@)?/i, "").split(/[:/?]/)[0];
+  const local = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(host);
+  if (local || process.env.SEED_FORCE === "true") return;
+  const [contacts, companies] = await Promise.all([db.contact.count(), db.company.count()]);
+  if (contacts || companies) {
+    throw new Error(
+      `Refusing to seed ${host}: it already has ${contacts} contacts and ${companies} companies, and seeding wipes them. ` +
+        "Set SEED_FORCE=true only if you really want to erase this database.",
+    );
+  }
+}
+
 async function main() {
+  await guardRemoteWipe();
   await wipe();
   const { users, teams } = await seedUsers();
   await seedMetadata();
   await seedLayouts(teams);
+  if (!SAMPLE_DATA) {
+    console.log(`Seeded the workspace setup (admin ${ADMIN_EMAIL}, roles, teams, properties, lists, layouts) without sample data.`);
+    return;
+  }
   const summary = await seedRecords(users);
   console.log(`Seeded ${users.length} users, ${summary.companies} companies, ${summary.contacts} contacts.`);
 }
