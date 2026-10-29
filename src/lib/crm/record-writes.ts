@@ -2,6 +2,7 @@
 // Not a "use server" module: these take a trusted userId and must never be callable from the client.
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { findRegion, normalizeCountry, normalizeRegion, timeZoneFor } from "./geo";
 import { JOURNEY_PROPERTY, shouldMove, stageForProperty, type JourneyMeta } from "./journey";
 import { coerceValue, getPropDefs } from "./properties";
 import type { CrmObject } from "./types";
@@ -30,8 +31,14 @@ export async function applyUpdate(
   // Automations may set system-maintained properties; people may not
   if ((def.isReadOnly && !meta.rule) || def.isVirtual) throw new Error(`${def.label} is read-only`);
 
-  const value = coerceValue(def, rawValue);
   const record = (await readRecord(object, id)) as unknown as Record<string, unknown> & { properties: Prisma.JsonObject };
+  // "USA" → United States, "TX" → Texas
+  if (typeof rawValue === "string" && rawValue.trim()) {
+    const raw = rawValue;
+    if (property === "country") rawValue = normalizeCountry(raw);
+    if (property === "state") rawValue = normalizeRegion(record.country as string | null, raw);
+  }
+  const value = coerceValue(def, rawValue);
   const before = def.isBuiltIn ? record[property] : record.properties?.[property];
   if (JSON.stringify(before ?? null) === JSON.stringify(value ?? null)) return false;
 
@@ -59,6 +66,17 @@ export async function applyUpdate(
     }),
   ]);
   if (object === "COMPANY") await afterCompanyChange(id, property, before, value, userId, meta);
+  // The time zone follows the state/province, or the country when no state is known
+  if (property === "country" || property === "state") {
+    const location = { country: record.country, state: record.state, [property]: value } as { country?: string | null; state?: string | null };
+    // A state/province of the old country doesn't belong to the new one
+    if (property === "country" && findRegion(before as string | null, location.state) && !findRegion(location.country, location.state)) {
+      await applyUpdate(object, id, "state", null, userId, { rule: "Time zone from location" });
+      location.state = null;
+    }
+    const tz = timeZoneFor(location.country, location.state);
+    if (tz && tz !== record.timeZone) await applyUpdate(object, id, "timeZone", tz, userId, { rule: "Time zone from location" });
+  }
   return true;
 }
 

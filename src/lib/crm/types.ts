@@ -51,16 +51,21 @@ export type Operator =
   // enum / user / multi-enum
   | "is_any_of"
   | "is_none_of"
-  // text
+  /** multi-select: has every one of the values */
+  | "is_all_of"
+  // text (is_any_of / is_none_of take a list of exact values)
   | "contains"
   | "not_contains"
   | "is"
   | "starts_with"
+  | "ends_with"
   // number
   | "eq"
   | "neq"
   | "gt"
   | "lt"
+  | "gte"
+  | "lte"
   | "between"
   // date
   | "on"
@@ -137,6 +142,12 @@ export interface ViewSummary {
   isDefault: boolean;
   state: ViewState;
   pageSize: number;
+}
+
+/** Records left out of a segment even when they match its filters or were added to it. */
+export interface SegmentExclusions {
+  segments: string[];
+  records: string[];
 }
 
 export interface SegmentSummary {

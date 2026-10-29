@@ -101,6 +101,10 @@ Then import your Dynamics data in **Contacts → Import**.
 Every push to `main` on GitHub redeploys the site. New database migrations in the push are applied during the
 build, before the new version goes live.
 
+If the live database was set up before the country, state/province and time zone pick lists were added, run
+`npm run db:sync` once against it (with `DATABASE_URL` set as in step 4). It adds new properties, updates the location pick lists and fills
+each record's time zone from its location. It is safe to run again.
+
 ## Good to know
 
 - **Function time limit.** Netlify Functions stop after about 10 seconds by default. Imports send 50 rows per

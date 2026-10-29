@@ -5,9 +5,11 @@ import { useState } from "react";
 import { CellEditor } from "@/components/index/cell-editor";
 import { PropValue } from "@/components/index/values";
 import { Popover, PopoverAnchor, PopoverContent, Tooltip } from "@/components/ui/overlays";
+import { regionsFor } from "@/lib/crm/geo";
 import type { RecordActivity } from "@/lib/crm/record-types";
 import type { PropDef } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
+import { PhoneProperty } from "./phone-property";
 import { useRecord } from "./record-context";
 
 /** Collapsible card used in the left and right columns; collapse state is remembered per user. */
@@ -71,6 +73,10 @@ export function PropertyRow({ def, value, compact }: { def: PropDef; value: unkn
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const editable = !def.isReadOnly && !def.isVirtual;
+  if (editable && def.type === "PHONE") return <PhoneProperty def={def} value={value} compact={compact} />;
+  // State/Province picks from the record country's list when we have one
+  const regions = def.name === "state" ? regionsFor(data.values.country as string | null) : [];
+  const editDef: PropDef = regions.length ? { ...def, type: "ENUM", options: regions.map((r, i) => ({ value: r.name, label: r.name, order: i })) } : def;
 
   async function save(v: unknown) {
     setEditing(false);
@@ -110,7 +116,7 @@ export function PropertyRow({ def, value, compact }: { def: PropDef; value: unkn
           </PopoverAnchor>
           {editing && (
             <PopoverContent onOpenAutoFocus={(e) => e.preventDefault()}>
-              <CellEditor def={def} value={value} users={data.users} onSave={save} onCancel={() => setEditing(false)} />
+              <CellEditor def={editDef} value={value} users={data.users} onSave={save} onCancel={() => setEditing(false)} />
             </PopoverContent>
           )}
         </Popover>

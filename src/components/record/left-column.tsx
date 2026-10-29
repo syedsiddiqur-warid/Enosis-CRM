@@ -1,11 +1,11 @@
 "use client";
 
-import { CalendarDays, ChevronDown, ChevronLeft, Clock, Copy, Mail, MoreHorizontal, NotebookPen, Pencil, Phone, Settings2, SquareCheckBig } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronLeft, Copy, Mail, MoreHorizontal, NotebookPen, Pencil, Phone, Settings2, SquareCheckBig } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { PropertyPicker } from "@/components/index/property-picker";
-import { CompanyLogo, copyText } from "@/components/index/values";
+import { CompanyLogo, LocalTime, copyText } from "@/components/index/values";
 import { Button, Input, Label } from "@/components/ui/button";
 import {
   Dialog,
@@ -24,7 +24,7 @@ import { enrichCompanyAction } from "@/lib/crm/company-actions";
 import { formatDateTime, localTime } from "@/lib/crm/dates";
 import { cloneRecord, deleteRecord, getRecordHistory, setFollow, setKeyInfo, type HistoryRow } from "@/lib/crm/record-actions";
 import type { QuickAction } from "@/lib/crm/record-types";
-import { colorFor, formatPhone, initials } from "@/lib/utils";
+import { colorFor, formatPhone, initials, phoneHref } from "@/lib/utils";
 import { useRecord } from "./record-context";
 import { PropertyRow, RecordCard, isShown } from "./record-ui";
 
@@ -190,10 +190,11 @@ function HeaderCard() {
           )}
           {header.domain && <CopyLine href={`https://${header.domain}`} text={header.domain} label="domain" />}
           {header.email && <CopyLine href={`mailto:${header.email}`} text={header.email} label="email" />}
-          {header.phone && <CopyLine href={`tel:${header.phone}`} text={formatPhone(header.phone)} copy={header.phone} label="phone number" />}
+          {header.phone && <CopyLine href={phoneHref(header.phone)} text={formatPhone(header.phone)} copy={header.phone} label="phone number" />}
           {time && (
-            <div className="mt-1 flex items-center gap-1 text-[12px] text-ink-muted">
-              <Clock className="size-3.5" /> {time} local time
+            <div className="mt-1 flex min-w-0 items-center gap-1 text-[12px] text-ink-muted">
+              <LocalTime tz={header.timeZone} suffix="local time" icon />
+              <span className="truncate text-ink-subtle">· {header.timeZone}</span>
             </div>
           )}
         </div>

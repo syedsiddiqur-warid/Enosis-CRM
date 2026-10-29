@@ -15,7 +15,8 @@
     "db:studio": "prisma studio",
     "postinstall": "prisma generate",
     "build:netlify": "prisma migrate deploy && next build",
-    "db:seed:prod": "prisma db seed -- --no-sample-data"
+    "db:seed:prod": "prisma db seed -- --no-sample-data",
+    "db:sync": "tsx scripts/sync-metadata.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

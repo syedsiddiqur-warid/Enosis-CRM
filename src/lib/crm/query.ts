@@ -6,6 +6,7 @@ import { dayRange, resolveRelative } from "./dates";
 import { isSortable } from "./properties";
 import {
   RELATED_KINDS,
+  type SegmentExclusions,
   SEGMENT_PROPERTY,
   isRelated,
   type CrmObject,
@@ -24,6 +25,7 @@ export interface SegmentDefinition {
   objectType: CrmObject;
   type: "ACTIVE" | "STATIC";
   groups: FilterGroup[];
+  exclusions?: SegmentExclusions | null;
 }
 
 export interface QueryContext {
@@ -109,12 +111,20 @@ function columnWhere(field: string, def: PropDef, cond: FilterCondition, ctx: Qu
     case "EMAIL":
     case "PHONE":
     case "URL": {
+      // A pasted list of exact values: names, domains, cities…
+      if (op === "is_any_of" || op === "is_none_of") {
+        const vals = arr(value).map((x) => x.trim()).filter(Boolean);
+        if (!vals.length) return null;
+        const any = { OR: vals.map((x) => ({ [field]: { equals: x, mode: "insensitive" } })) };
+        return op === "is_any_of" ? any : orNull({ NOT: any });
+      }
       const v = String(value ?? "");
       if (!v) return null;
       if (op === "contains") return { [field]: { contains: v, mode: "insensitive" } };
       if (op === "not_contains") return orNull({ NOT: { [field]: { contains: v, mode: "insensitive" } } });
       if (op === "is") return { [field]: { equals: v, mode: "insensitive" } };
       if (op === "starts_with") return { [field]: { startsWith: v, mode: "insensitive" } };
+      if (op === "ends_with") return { [field]: { endsWith: v, mode: "insensitive" } };
       return null;
     }
     case "ENUM":
@@ -143,6 +153,7 @@ function columnWhere(field: string, def: PropDef, cond: FilterCondition, ctx: Qu
       const vals = arr(value);
       if (!vals.length) return null;
       if (op === "is_any_of") return { [field]: { hasSome: vals } };
+      if (op === "is_all_of") return { [field]: { hasEvery: vals } };
       if (op === "is_none_of") return { NOT: { [field]: { hasSome: vals } } };
       return null;
     }
@@ -159,6 +170,8 @@ function columnWhere(field: string, def: PropDef, cond: FilterCondition, ctx: Qu
       if (op === "neq") return orNull({ [field]: { not: n } });
       if (op === "gt") return { [field]: { gt: n } };
       if (op === "lt") return { [field]: { lt: n } };
+      if (op === "gte") return { [field]: { gte: n } };
+      if (op === "lte") return { [field]: { lte: n } };
       return null;
     }
     case "BOOLEAN":
@@ -194,6 +207,7 @@ function jsonWhere(name: string, def: PropDef, cond: FilterCondition): Where | n
     case "MULTI_ENUM": {
       const vals = arr(value);
       if (!vals.length) return null;
+      if (op === "is_all_of") return { AND: vals.map((v) => p({ array_contains: [v] })) };
       const any = { OR: vals.map((v) => p({ array_contains: [v] })) };
       return op === "is_none_of" ? { NOT: any } : any;
     }
@@ -205,6 +219,8 @@ function jsonWhere(name: string, def: PropDef, cond: FilterCondition): Where | n
       if (op === "neq") return { NOT: p({ equals: n }) };
       if (op === "gt") return p({ gt: n });
       if (op === "lt") return p({ lt: n });
+      if (op === "gte") return p({ gte: n });
+      if (op === "lte") return p({ lte: n });
       return null;
     }
     case "BOOLEAN":
@@ -218,12 +234,19 @@ function jsonWhere(name: string, def: PropDef, cond: FilterCondition): Where | n
       return { AND: parts };
     }
     default: {
+      if (op === "is_any_of" || op === "is_none_of") {
+        const vals = arr(value).map((x) => x.trim()).filter(Boolean);
+        if (!vals.length) return null;
+        const any = { OR: vals.map((x) => p({ equals: x })) };
+        return op === "is_any_of" ? any : { NOT: any };
+      }
       const v = String(value ?? "");
       if (!v) return null;
       if (op === "contains") return p({ string_contains: v });
       if (op === "not_contains") return { NOT: p({ string_contains: v }) };
       if (op === "is") return p({ equals: v });
       if (op === "starts_with") return p({ string_starts_with: v });
+      if (op === "ends_with") return p({ string_ends_with: v });
       return null;
     }
   }
@@ -248,10 +271,18 @@ function relatedWhere(object: CrmObject, kind: RelatedKind, conds: FilterConditi
 export function segmentMembershipWhere(object: CrmObject, segmentId: string, ctx: QueryContext): Where {
   const seg = ctx.segments?.get(segmentId);
   if (!seg || seg.objectType !== object) return MATCH_NOTHING;
-  if (seg.type === "STATIC") return { segments: { some: { segmentId } } };
   const depth = ctx.depth ?? 0;
-  if (depth >= MAX_SEGMENT_DEPTH) return MATCH_NOTHING;
-  return groupsWhere(object, seg.groups, { ...ctx, depth: depth + 1 }) ?? MATCH_NOTHING;
+  if (seg.type === "ACTIVE" && depth >= MAX_SEGMENT_DEPTH) return MATCH_NOTHING;
+  const base = seg.type === "STATIC" ? { segments: { some: { segmentId } } } : (groupsWhere(object, seg.groups, { ...ctx, depth: depth + 1 }) ?? MATCH_NOTHING);
+  return withExclusions(object, base, seg.exclusions, { ...ctx, depth: depth + 1 });
+}
+
+/** Leave out records of the excluded segments and the excluded records themselves. */
+export function withExclusions(object: CrmObject, base: Where, ex: SegmentExclusions | null | undefined, ctx: QueryContext): Where {
+  const and: Where[] = [base];
+  if (ex?.records?.length) and.push({ id: { notIn: ex.records } });
+  if (ex?.segments?.length && (ctx.depth ?? 0) <= MAX_SEGMENT_DEPTH) and.push({ NOT: { OR: ex.segments.map((id) => segmentMembershipWhere(object, id, ctx)) } });
+  return and.length === 1 ? base : { AND: and };
 }
 
 export function conditionWhere(object: CrmObject, cond: FilterCondition, ctx: QueryContext): Where | null {

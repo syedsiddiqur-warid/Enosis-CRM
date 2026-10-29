@@ -7,6 +7,7 @@ import { Button, Input, Label, Select } from "@/components/ui/button";
 import { Checkbox, Dialog, DialogContent } from "@/components/ui/overlays";
 import { createCompany, createContact, createProperty, searchCompanies } from "@/lib/crm/actions";
 import { INDUSTRIES, LEAD_STATUSES, LIFECYCLE_STAGES } from "@/lib/crm/defaults";
+import { COUNTRIES, regionsFor, timeZoneFor } from "@/lib/crm/geo";
 import type { ColumnSpec, CrmObject, PropDef, PropType, UserLite } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 
@@ -149,9 +150,32 @@ export function CreateRecordDialog({ object, open, onOpenChange, users, currentU
                 </div>
                 <div>
                   <Label htmlFor="co-country">Country/Region</Label>
-                  <Input id="co-country" value={form.country ?? ""} onChange={set("country")} />
+                  <Select id="co-country" value={form.country ?? ""} onChange={(e) => setForm((f) => ({ ...f, country: e.target.value, state: "" }))}>
+                    <option value="">--</option>
+                    {COUNTRIES.map((c) => (
+                      <option key={c.code} value={c.name}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </Select>
                 </div>
               </div>
+              {regionsFor(form.country).length > 0 && (
+                <div>
+                  <Label htmlFor="co-state">State/Province</Label>
+                  <Select id="co-state" value={form.state ?? ""} onChange={set("state")}>
+                    <option value="">--</option>
+                    {regionsFor(form.country).map((r) => (
+                      <option key={r.code} value={r.name}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              )}
+              {form.country && (
+                <p className="text-[12px] text-ink-muted">Time zone: {timeZoneFor(form.country, form.state) ?? "--"}</p>
+              )}
             </>
           )}
           <div>

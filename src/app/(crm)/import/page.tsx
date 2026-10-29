@@ -12,9 +12,10 @@ export default async function ImportPage({ searchParams }: { searchParams: Promi
   const user = await currentUser();
   if (!user) redirect("/login");
   const object: ImportObject = (await searchParams).object === "companies" ? "COMPANY" : "CONTACT";
-  const [defs, companyDefs, users, templates, outcomes] = await Promise.all([
+  const [defs, companyDefs, contactDefs, users, templates, outcomes] = await Promise.all([
     getPropDefs(object),
     getPropDefs("COMPANY"),
+    getPropDefs("CONTACT"),
     db.user.findMany({ where: { isActive: true }, select: { id: true, name: true, email: true }, orderBy: { name: "asc" } }),
     db.importMappingTemplate.findMany({ where: { objectType: object }, orderBy: { name: "asc" } }),
     db.optionList.findUnique({ where: { key: "callResult" } }),
@@ -23,7 +24,7 @@ export default async function ImportPage({ searchParams }: { searchParams: Promi
     <ImportWizard
       key={object}
       object={object}
-      targets={importTargets(object, defs, companyDefs)}
+      targets={importTargets(object, defs, object === "CONTACT" ? companyDefs : contactDefs)}
       callOutcomes={((outcomes?.options as PropOption[] | null) ?? []).filter((o) => !o.archived).map((o) => o.value)}
       users={users}
       currentUserId={user.id}

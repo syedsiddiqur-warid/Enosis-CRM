@@ -8,7 +8,7 @@ import { loadQueryContext } from "./context";
 import { OBJECT_LABELS } from "./defaults";
 import { searchWhere } from "./query";
 import { canEditSegment, segmentRecordsWhere } from "./segments";
-import type { CrmObject, FilterCondition, FilterGroup, ViewState } from "./types";
+import type { CrmObject, FilterCondition, FilterGroup, SegmentExclusions, ViewState } from "./types";
 import { isActiveCondition } from "./view-state";
 
 type Result<T = undefined> = { ok: true; data?: T } | { ok: false; error: string };
@@ -81,8 +81,13 @@ export async function createSegmentFromView(object: CrmObject, name: string, sys
     const base = Object.values(state.quick).filter(isActiveCondition);
     if (systemKey === "mine") base.push({ property: "ownerId", operator: "is_any_of", value: [user.id] });
     if (systemKey === "unassigned") base.push({ property: "ownerId", operator: "is_any_of", value: ["__none__"] });
-    // The advanced panel only builds AND groups, so the shared conditions can be appended to each
-    const groups: FilterGroup[] = state.advanced.length ? state.advanced.map((g) => ({ op: "AND", conditions: [...g.conditions, ...base] })) : [{ op: "AND", conditions: base }];
+    // The shared conditions apply to every group. An OR group (a or b) becomes one AND group per condition,
+    // since base AND (a OR b) = (base AND a) OR (base AND b)
+    const groups: FilterGroup[] = state.advanced.length
+      ? state.advanced.flatMap((g): FilterGroup[] =>
+          g.op === "OR" && base.length ? g.conditions.map((c) => ({ op: "AND", conditions: [c, ...base] })) : [{ op: g.op, conditions: [...g.conditions, ...base] }],
+        )
+      : [{ op: "AND", conditions: base }];
     if (!groups.some((g) => g.conditions.length)) throw new Error("Add a filter first. A segment of every record isn't useful");
     return createSegment(object, name, "ACTIVE", groups);
   } catch (e) {
@@ -90,19 +95,31 @@ export async function createSegmentFromView(object: CrmObject, name: string, sys
   }
 }
 
-export async function updateSegment(id: string, patch: { name?: string; groups?: FilterGroup[]; visibility?: "PRIVATE" | "TEAM" | "EVERYONE" }): Promise<Result> {
+export async function updateSegment(
+  id: string,
+  patch: { name?: string; groups?: FilterGroup[]; visibility?: "PRIVATE" | "TEAM" | "EVERYONE"; description?: string | null; exclusions?: SegmentExclusions },
+): Promise<Result> {
   try {
     const user = await requireUser();
     const s = await editableSegment(id, user.id);
     if (patch.groups && s.type !== "ACTIVE") throw new Error("Static segments don't have filters");
     const groups = patch.groups ? cleanGroups(patch.groups, user.id) : undefined;
     if (groups && !groups.length) throw new Error("An active segment needs at least one filter");
+    let exclusions: SegmentExclusions | undefined;
+    if (patch.exclusions) {
+      exclusions = { segments: [...new Set(patch.exclusions.segments.map(String))].filter((x) => x !== id), records: [...new Set(patch.exclusions.records.map(String))] };
+      if (exclusions.segments.length > 10) throw new Error("Exclude up to 10 segments");
+      const others = await db.segment.count({ where: { id: { in: exclusions.segments }, objectType: s.objectType } });
+      if (others !== exclusions.segments.length) throw new Error("Excluded segments must be of the same object");
+    }
     await db.segment.update({
       where: { id },
       data: {
         ...(patch.name !== undefined ? { name: cleanName(patch.name) } : {}),
         ...(patch.visibility ? { visibility: patch.visibility } : {}),
         ...(groups ? { filters: json(groups) } : {}),
+        ...(patch.description !== undefined ? { description: patch.description?.trim().slice(0, 500) || null } : {}),
+        ...(exclusions ? { exclusions: json(exclusions) } : {}),
       },
     });
     await db.auditLog.create({ data: { action: "settings", changes: json({ updatedSegment: { id, ...patch } }), userId: user.id } });
@@ -118,7 +135,7 @@ export async function cloneSegment(id: string): Promise<Result<{ id: string }>> 
     const user = await requireUser();
     const s = await db.segment.findUniqueOrThrow({ where: { id }, include: { members: { select: { recordId: true } } } });
     const copy = await db.segment.create({
-      data: { name: `${s.name} (copy)`.slice(0, 100), objectType: s.objectType, type: s.type, filters: s.filters ?? undefined, ownerId: user.id },
+      data: { name: `${s.name} (copy)`.slice(0, 100), objectType: s.objectType, type: s.type, filters: s.filters ?? undefined, exclusions: s.exclusions ?? undefined, description: s.description, ownerId: user.id },
     });
     if (s.type === "STATIC" && s.members.length) {
       await db.segmentMember.createMany({ data: await memberRows(s.objectType as CrmObject, copy.id, s.members.map((m) => m.recordId), user.id) });

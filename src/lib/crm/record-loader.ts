@@ -121,7 +121,7 @@ export async function loadRecord(object: CrmObject, id: string, userId: string) 
 
   let header: { name: string; subtitle: string | null; email: string | null; domain: string | null; phone: string | null; timeZone: string | null; primaryCompany: { id: string; name: string } | null };
   let companies: { id: string; name: string; domain: string | null; phone: string | null; isPrimary: boolean; labels: string[] }[] = [];
-  let contacts: { id: string; name: string; jobTitle: string | null; email: string | null; inDbnd: string | null; crtCount: number; labels: string[] }[] = [];
+  let contacts: { id: string; name: string; jobTitle: string | null; email: string | null; inDbnd: string | null; crtCount: number; timeZone: string | null; labels: string[] }[] = [];
   let activityWhere: Prisma.ActivityWhereInput;
   let phoneWhere: Prisma.PhoneNumberWhereInput;
   let dealWhere: Prisma.DealWhereInput;
@@ -156,10 +156,10 @@ export async function loadRecord(object: CrmObject, id: string, userId: string) 
     const co = record as Prisma.CompanyGetPayload<object>;
     const links = await db.contactCompany.findMany({
       where: { companyId: id, contact: { deletedAt: null } },
-      include: { contact: { select: { id: true, firstName: true, lastName: true, email: true, jobTitle: true, inDbnd: true, crtCount: true } } },
+      include: { contact: { select: { id: true, firstName: true, lastName: true, email: true, jobTitle: true, inDbnd: true, crtCount: true, timeZone: true } } },
       orderBy: { createdAt: "asc" },
     });
-    contacts = links.map((l) => ({ id: l.contact.id, name: fullName(l.contact), jobTitle: l.contact.jobTitle, email: l.contact.email, inDbnd: l.contact.inDbnd, crtCount: l.contact.crtCount, labels: l.labels }));
+    contacts = links.map((l) => ({ id: l.contact.id, name: fullName(l.contact), jobTitle: l.contact.jobTitle, email: l.contact.email, inDbnd: l.contact.inDbnd, crtCount: l.contact.crtCount, timeZone: l.contact.timeZone ?? co.timeZone, labels: l.labels }));
     values.targetCount = contacts.length;
     header = { name: co.name, subtitle: co.industry, email: co.email, domain: co.domain, phone: co.phone, timeZone: co.timeZone, primaryCompany: null };
     // Company timelines include its contacts' activities (but not their system events)

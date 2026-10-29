@@ -1,5 +1,7 @@
 // Default metadata seeded into the database. After seeding, the database is the
 // source of truth — admins edit these in Settings, and pages read them from there.
+import { COUNTRIES } from "./geo";
+import { TIME_ZONE_IDS } from "./time-zones";
 import type { CrmObject, PropOption, PropType } from "./types";
 
 const opts = (pairs: [string, string?][]): PropOption[] =>
@@ -155,16 +157,8 @@ export const INDUSTRIES = opts([
 export const SENIORITIES = opts([["Owner"], ["C-Level"], ["VP"], ["Director"], ["Manager"], ["Individual contributor"]]);
 export const DEPARTMENTS = opts([["Executive"], ["Engineering"], ["Product"], ["Operations"], ["Sales"], ["Marketing"], ["Finance"]]);
 export const OFFER_TYPES = opts([["Product"], ["Service"]]);
-export const TIME_ZONES = opts([
-  ["America/New_York"],
-  ["America/Chicago"],
-  ["America/Denver"],
-  ["America/Los_Angeles"],
-  ["Europe/London"],
-  ["Europe/Berlin"],
-  ["Australia/Sydney"],
-  ["Asia/Dhaka"],
-]);
+export const TIME_ZONES = opts(TIME_ZONE_IDS.map((z) => [z]));
+export const COUNTRY_OPTIONS = opts(COUNTRIES.map((c) => [c.name]));
 export const TECHNOLOGIES = opts([
   [".NET"],
   ["Java"],
@@ -262,9 +256,11 @@ export const PROPERTIES: Record<CrmObject, SeedProp[]> = {
     { name: "department", label: "Department", type: "ENUM", group: "contact_info", options: DEPARTMENTS },
     { name: "primaryCompany", label: "Primary company", type: "TEXT", group: "contact_info", isReadOnly: true },
     { name: "linkedinUrl", label: "LinkedIn", type: "URL", group: "contact_info" },
+    { name: "otherEmails", label: "Other emails", type: "TEXT", group: "contact_info", isBuiltIn: false, description: "More email addresses for this person" },
     { name: "city", label: "City", type: "TEXT", group: "contact_info" },
-    { name: "country", label: "Country", type: "TEXT", group: "contact_info" },
-    { name: "timeZone", label: "Time zone", type: "ENUM", group: "contact_info", options: TIME_ZONES },
+    { name: "country", label: "Country/Region", type: "ENUM", group: "contact_info", options: COUNTRY_OPTIONS },
+    { name: "state", label: "State/Province", type: "TEXT", group: "contact_info", description: "Picked from the country's states or provinces. Sets the time zone." },
+    { name: "timeZone", label: "Time zone", type: "ENUM", group: "contact_info", options: TIME_ZONES, description: "Set from the state/province or country. You can still change it." },
     ...lifecycleProps(),
     { name: "inDbnd", label: "In DBND", type: "ENUM", group: "calling", options: YES_NO_UNKNOWN, description: "Listed in the dial-by-name directory" },
     { name: "callStatus", label: "Call status", type: "ENUM", group: "calling", options: CALL_STATUSES, isReadOnly: true },
@@ -295,10 +291,10 @@ export const PROPERTIES: Record<CrmObject, SeedProp[]> = {
     { name: "phone", label: "Phone number", type: "PHONE", group: "company_info" },
     { name: "email", label: "Company email", type: "EMAIL", group: "company_info" },
     { name: "linkedinUrl", label: "LinkedIn company page", type: "URL", group: "company_info" },
-    { name: "country", label: "Country/Region", type: "TEXT", group: "company_info" },
-    { name: "state", label: "State/Region", type: "TEXT", group: "company_info" },
+    { name: "country", label: "Country/Region", type: "ENUM", group: "company_info", options: COUNTRY_OPTIONS },
+    { name: "state", label: "State/Province", type: "TEXT", group: "company_info", description: "Picked from the country's states or provinces. Sets the time zone." },
     { name: "city", label: "City", type: "TEXT", group: "company_info" },
-    { name: "timeZone", label: "Time zone", type: "ENUM", group: "company_info", options: TIME_ZONES },
+    { name: "timeZone", label: "Time zone", type: "ENUM", group: "company_info", options: TIME_ZONES, description: "Set from the state/province or country. You can still change it." },
     { name: "description", label: "Description", type: "TEXTAREA", group: "company_info" },
     { name: "industry", label: "Industry", type: "ENUM", group: "firmographics", options: INDUSTRIES },
     { name: "employees", label: "Number of employees", type: "NUMBER", group: "firmographics" },
@@ -324,6 +320,14 @@ export const PROPERTIES: Record<CrmObject, SeedProp[]> = {
     { name: "crtCount", label: "CRT count", type: "NUMBER", group: "calling", isReadOnly: true, description: "Calls logged to this company or its contacts" },
     { name: "connectedCount", label: "Connected calls", type: "NUMBER", group: "calling", isReadOnly: true },
     { name: "lastCallAt", label: "Last call date", type: "DATETIME", group: "calling", isReadOnly: true },
+    { name: "gatekeeper", label: "Gatekeeper", type: "ENUM", group: "calling", isBuiltIn: false, options: opts([["Extension"], ["Operator"], ["DBND"], ["DBND and Operator"]]), description: "How calls to the main line are screened" },
+    { name: "callerId", label: "Caller", type: "USER", group: "calling", isBuiltIn: false, description: "Who calls this company" },
+    { name: "interestLevel", label: "Interest level", type: "ENUM", group: "calling", isBuiltIn: false, options: INTEREST_LEVELS },
+    { name: "outsourcingExperience", label: "Outsourcing experience", type: "ENUM", group: "calling", isBuiltIn: false, options: opts([["Never outsourced"], ["Outsourced before"], ["Currently outsourcing"], ["Has own offshore center"]]) },
+    { name: "callingOutcome", label: "Calling outcome", type: "TEXT", group: "calling", isBuiltIn: false },
+    { name: "emailStatus", label: "Email status", type: "ENUM", group: "calling", isBuiltIn: false, options: opts([["Not sent"], ["Sent"]]) },
+    { name: "growthTrend", label: "Employee growth trend", type: "ENUM", group: "firmographics", isBuiltIn: false, options: opts([["Continuous growth"], ["Moderate growth"], ["Steady"], ["Negative growth"]]) },
+    { name: "dynamicsLeadId", label: "Dynamics lead ID", type: "TEXT", group: "research", isBuiltIn: false, description: "The lead ID from Dynamics CRM. Re-imports of the same export update this company." },
     { name: "batchNumber", label: "Batch number", type: "TEXT", group: "campaign" },
     { name: "tags", label: "Tags", type: "MULTI_ENUM", group: "campaign", options: opts([["Priority"], ["Enterprise"], ["Startup"], ["Re-engage"]]) },
     { name: "targetCount", label: "Target count", type: "NUMBER", group: "campaign", isReadOnly: true, description: "Number of associated contacts" },

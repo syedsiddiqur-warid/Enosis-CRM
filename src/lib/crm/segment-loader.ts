@@ -1,11 +1,13 @@
 import { db } from "@/lib/db";
 import { fromBase64Url } from "@/lib/utils";
-import { loadQueryContext, parseSegmentGroups } from "./context";
+import { loadQueryContext, parseExclusions, parseSegmentGroups } from "./context";
 import { DEFAULT_COLUMNS } from "./defaults";
 import { PAGE_SIZES } from "./index-loader";
 import { getPropertyGroups } from "./properties";
-import { fetchRows, groupsWhere, searchWhere, type Where } from "./query";
-import { canEditSegment, segmentRecordsWhere, segmentSummaries, segmentVisibilityWhere } from "./segments";
+import { searchRecords } from "./insight-actions";
+import { recordSegmentSize } from "./insights";
+import { fetchRows, groupsWhere, searchWhere, withExclusions, type Where } from "./query";
+import { canEditSegment, countRecords, segmentRecordsWhere, segmentSummaries, segmentVisibilityWhere } from "./segments";
 import type { ColumnSpec, CrmObject, FilterGroup, SortSpec, UserLite } from "./types";
 
 export interface SegmentSearchParams {
@@ -40,9 +42,19 @@ export async function loadSegment(id: string, sp: SegmentSearchParams, userId: s
   const draft = segment.type === "ACTIVE" ? fromBase64Url<FilterGroup[]>(sp.f) : null;
   const filters = draft ?? saved;
 
-  const base: Where = draft ? { AND: [{ deletedAt: null }, groupsWhere(object, draft, ctx) ?? { id: { in: [] } }] } : segmentRecordsWhere(object, segment.id, ctx);
+  const exclusions = parseExclusions(segment.exclusions);
+  const base: Where = draft
+    ? { AND: [{ deletedAt: null }, withExclusions(object, groupsWhere(object, draft, ctx) ?? { id: { in: [] } }, exclusions, ctx)] }
+    : segmentRecordsWhere(object, segment.id, ctx);
   const search = searchWhere(object, sp.q ?? "");
   const where = search ? { AND: [base, search] } : base;
+  const [size, database, excludedRecords] = await Promise.all([
+    countRecords(object, base),
+    countRecords(object, { deletedAt: null }),
+    exclusions.records.length ? searchRecords(object, "", exclusions.records) : Promise.resolve([]),
+  ]);
+  // The size history only follows the saved definition
+  const change7d = draft ? null : await recordSegmentSize(segment.id, size);
 
   const [sortProp, sortDir] = (sp.sort ?? "").split(":");
   const sort: SortSpec | null = sortProp ? { property: sortProp, direction: sortDir === "desc" ? "desc" : "asc" } : null;
@@ -60,7 +72,13 @@ export async function loadSegment(id: string, sp: SegmentSearchParams, userId: s
       ownerName: segment.owner?.name ?? segment.owner?.email ?? null,
       createdAt: segment.createdAt.toISOString(),
       updatedAt: segment.updatedAt.toISOString(),
+      description: segment.description,
     },
+    size,
+    database,
+    change7d,
+    exclusions,
+    excludedRecords,
     filters,
     savedFilters: saved,
     dirty: !!draft,

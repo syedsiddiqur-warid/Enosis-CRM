@@ -35,6 +35,66 @@ export const DYN_CALLER_NOTES = "dyn:callerNotes";
 
 /** Columns that are only stored on the company when importing contacts (Dynamics leads copy company data onto the person). */
 export const COMPANY_PROP_PREFIX = "companyprop:";
+/** Company imports: the lead person on the same row, created (or matched) and linked to the company. */
+export const CONTACT_PROP_PREFIX = "contactprop:";
+
+/** A Dynamics CRM "Lead Advanced Find View" export: one row per company, with its lead person, Description and Caller Notes. */
+export function isDynamicsLeadExport(headers: string[]) {
+  return headers.some((h) => /^\(do not modify\) lead$/i.test(h.trim()));
+}
+
+/** Where each column of a Dynamics lead export goes when it's imported as companies. Columns not listed are skipped. */
+export const DYNAMICS_LEAD_COLUMNS: Record<string, ImportTarget> = {
+  "(Do Not Modify) Lead": "prop:dynamicsLeadId",
+  Owner: "prop:ownerId",
+  Country: "prop:country",
+  "State/Province": "prop:state",
+  "First Name": `${CONTACT_PROP_PREFIX}firstName`,
+  "Last Name": `${CONTACT_PROP_PREFIX}lastName`,
+  "Job Title": `${CONTACT_PROP_PREFIX}jobTitle`,
+  Email: `${CONTACT_PROP_PREFIX}email`,
+  Industry: "prop:industry",
+  "Employee Growth": "prop:growthTrend",
+  "Investment Information": "prop:investmentInfo",
+  "Founded On": "prop:foundedYear",
+  "Technology Focus": "prop:technologies",
+  "Company Name": "prop:name",
+  Website: "prop:domain",
+  LinkedIn: "prop:linkedinUrl",
+  "Email Address 2": "prop:email",
+  "No. of Employees": "prop:employees",
+  "Offer Type": "prop:offerType",
+  Source: "prop:source",
+  Campaign: "prop:campaign",
+  "Viable Status": "prop:viable",
+  "Viable Checked By": "prop:viableCheckedBy",
+  "Viable Checked On": "prop:viableCheckedOn",
+  "Callable Status": "prop:callable",
+  "Callable Checked By": "prop:callableCheckedBy",
+  "Callable Checked On": "prop:callableCheckedOn",
+  "Research Result": "prop:researchResult",
+  "Reseach Type": "prop:researchType",
+  "Research Type": "prop:researchType",
+  "Research Notes": "note",
+  "Researched By": "prop:researcherId",
+  "Research Date": "prop:researchedAt",
+  "Address 1: Telephone 1": "phones",
+  "Address 1: Telephone 2": "phones",
+  "Calling Outcome": "prop:callingOutcome",
+  "Interest Level": "prop:interestLevel",
+  "Outsourcing Experience": "prop:outsourcingExperience",
+  Gatekeeper: "prop:gatekeeper",
+  "CRT Count": "prop:crtCount",
+  "Caller Notes": DYN_CALLER_NOTES,
+  Description: DYN_DESCRIPTION,
+  "Email Status": "prop:emailStatus",
+  "Caller / Owner": "prop:callerId",
+};
+
+/** Dynamics wording → this CRM's option values */
+export const OPTION_ALIASES: Record<string, Record<string, string>> = {
+  callStatus: { "talked to target": "Reached Target", "couldnt reach target": "Never Reached Targets", "couldn't reach target": "Never Reached Targets" },
+};
 
 export interface ImportRowResult {
   row: number;
@@ -50,7 +110,7 @@ export interface ImportChunkResult {
 }
 
 /** Properties the system maintains itself and imports can't set. */
-export const NOT_IMPORTABLE = new Set(["createdAt", "leadStateAt", "researchedAt", "lastEnrichedAt", "signalTypes", "lastSignalAt", "viableCheckedBy", "viableCheckedOn", "callableCheckedBy", "callableCheckedOn", "targetCount", "primaryCompany", "lastActivityAt"]);
+export const NOT_IMPORTABLE = new Set(["createdAt", "leadStateAt", "lastEnrichedAt", "signalTypes", "lastSignalAt", "targetCount", "primaryCompany", "lastActivityAt"]);
 
 /** Extra header spellings recognised when matching columns (Dynamics CRM and common tool exports). */
 const ALIASES: Record<string, string[]> = {
@@ -65,7 +125,7 @@ const ALIASES: Record<string, string[]> = {
   "prop:domain": ["website", "domain", "company domain", "web site", "url", "company website"],
   "prop:employees": ["employees", "# employees", "employee count", "company size", "headcount", "no. of employees"],
   "prop:country": ["country", "country/region", "company country"],
-  "prop:state": ["state", "state/province", "region", "company state"],
+  "prop:state": ["state", "state/province", "province", "region", "state/region", "company state"],
   "prop:city": ["city", "company city"],
   "prop:industry": ["industry"],
   "prop:description": ["description", "about", "short description"],
@@ -110,8 +170,9 @@ export function suggestTarget(header: string, targets: ImportTargetOption[], obj
   return "skip";
 }
 
-/** Columns the import page offers for an object. Contact imports can also fill company properties. */
-export function importTargets(object: ImportObject, defs: PropDef[], companyDefs: PropDef[] = []): ImportTargetOption[] {
+/** Columns the import page offers for an object. Contact imports can also fill company properties (`otherDefs` = company
+ *  properties); company imports can create the row's lead person (`otherDefs` = contact properties). */
+export function importTargets(object: ImportObject, defs: PropDef[], otherDefs: PropDef[] = []): ImportTargetOption[] {
   const importable = (d: PropDef) => !d.isVirtual && !NOT_IMPORTABLE.has(d.name);
   const props = defs.filter(importable).map((d) => ({ value: `prop:${d.name}`, label: d.label, group: d.groupLabel ?? "Properties", hint: formatHint(d) }));
   const extra: ImportTargetOption[] =
@@ -121,16 +182,19 @@ export function importTargets(object: ImportObject, defs: PropDef[], companyDefs
           { value: "company:domain", label: "Company domain (matches the company)", group: "Associations", hint: "acme.com or https://www.acme.com" },
         ]
       : [];
-  const companyProps =
+  // Contact imports fill the contact's company; company imports create the row's lead person
+  const otherProps =
     object === "CONTACT"
-      ? companyDefs
+      ? otherDefs
           .filter((d) => importable(d) && d.name !== "name" && d.name !== "domain")
           .map((d) => ({ value: `${COMPANY_PROP_PREFIX}${d.name}`, label: `Company › ${d.label}`, group: "Company (filled on the contact's company)", hint: formatHint(d) }))
-      : [];
+      : otherDefs
+          .filter((d) => importable(d) && !d.isReadOnly)
+          .map((d) => ({ value: `${CONTACT_PROP_PREFIX}${d.name}`, label: `Lead person › ${d.label}`, group: "Lead person (a contact linked to the company)", hint: formatHint(d) }));
   return [
     ...extra,
     ...props,
-    ...companyProps,
+    ...otherProps,
     {
       value: DYN_DESCRIPTION,
       label: "Dynamics Description (Targets>> and Numbers>>)",

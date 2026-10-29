@@ -1,7 +1,8 @@
 "use client";
 
-import { Building2, Copy } from "lucide-react";
-import { formatDate, formatDateTime } from "@/lib/crm/dates";
+import { Building2, Clock, Copy } from "lucide-react";
+import { useEffect, useState } from "react";
+import { formatDate, formatDateTime, localTime } from "@/lib/crm/dates";
 import type { PropDef, PropOption, UserLite } from "@/lib/crm/types";
 import { cn, colorFor, formatNumber, formatPhone, initials } from "@/lib/utils";
 
@@ -47,6 +48,25 @@ export function copyText(text: string) {
   void navigator.clipboard?.writeText(text);
 }
 
+/** The current time in a time zone, kept up to date while the page is open. */
+export function LocalTime({ tz, suffix, icon }: { tz: string | null | undefined; suffix?: string; icon?: boolean }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!tz) return;
+    const t = setInterval(() => tick((n) => n + 1), 30_000);
+    return () => clearInterval(t);
+  }, [tz]);
+  const time = localTime(tz);
+  if (!time) return null;
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 tabular-nums" suppressHydrationWarning>
+      {icon && <Clock className="size-3.5" />}
+      {time}
+      {suffix && ` ${suffix}`}
+    </span>
+  );
+}
+
 /** Read-only rendering of a property value, used by table cells, preview and board cards. */
 export function PropValue({ def, value, users }: { def: PropDef; value: unknown; users: UserLite[] }) {
   if (value === null || value === undefined || value === "" || (Array.isArray(value) && !value.length)) {
@@ -65,6 +85,15 @@ export function PropValue({ def, value, users }: { def: PropDef; value: unknown;
     case "ENUM":
     case "RADIO": {
       const o = optionFor(def, value);
+      if (def.name === "timeZone")
+        return (
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate">{o?.label ?? String(value)}</span>
+            <span className="shrink-0 text-ink-muted">
+              · <LocalTime tz={String(value)} />
+            </span>
+          </span>
+        );
       return def.name === "lifecycleStage" || def.name === "leadState" || o?.color ? <Pill label={o?.label ?? String(value)} color={o?.color} /> : <span className="truncate">{o?.label ?? String(value)}</span>;
     }
     case "MULTI_ENUM":

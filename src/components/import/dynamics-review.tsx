@@ -165,8 +165,14 @@ export function DynamicsReview({
                           <span className="font-medium">{[t.firstName, t.lastName].filter(Boolean).join(" ") || t.email}</span>
                           {t.jobTitle && <span className="text-ink-muted">, {t.jobTitle}</span>}
                           {t.email && <span className="text-ink-muted"> · {t.email}</span>}
-                          {t.phone && <span className="text-ink-muted"> · {formatPhone(t.phone)}</span>}
+                          {t.emails.length > 1 && <span className="text-ink-subtle"> +{t.emails.length - 1} email{t.emails.length > 2 ? "s" : ""}</span>}
+                          {t.phones.length > 0 && <span className="text-ink-muted"> · {t.phones.map((ph) => formatPhone(ph.extension ? `${ph.number} ext. ${ph.extension}` : ph.number) + (ph.status ? ` (${ph.status.toLowerCase()})` : "")).join(", ")}</span>}
+                          {t.extension && <span className="text-ink-muted"> · ext. {t.extension}</span>}
+                          {t.dbnd && <span className="text-ink-muted"> · DBND {t.dbnd === "No" ? "not listed" : t.dbnd}</span>}
                           {t.linkedinUrl && <span className="text-ink-muted"> · LinkedIn</span>}
+                          {t.doNotCall && <span className="text-danger"> · do not call</span>}
+                          {t.noLonger && <span className="text-ink-subtle"> · no longer there</span>}
+                          {t.remarks.length > 0 && <span className="text-ink-subtle"> · {t.remarks.join("; ")}</span>}
                         </Item>
                       ))}
                     </Group>

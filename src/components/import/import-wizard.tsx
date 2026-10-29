@@ -7,7 +7,7 @@ import { useMemo, useRef, useState } from "react";
 import { Button, Input, Label, Select } from "@/components/ui/button";
 import { looksLikeCallerNotes, looksLikeDescription, parseDynamics } from "@/lib/crm/dynamics-parser";
 import { finishImport, importChunk, saveImportTemplate, startImport, validateImport, type ImportRow, type ImportSetup } from "@/lib/crm/import-actions";
-import { DYN_CALLER_NOTES, DYN_DESCRIPTION, suggestTarget, type ImportObject, type ImportOptions, type ImportRowResult, type ImportTargetOption } from "@/lib/crm/import-shared";
+import { DYN_CALLER_NOTES, DYN_DESCRIPTION, DYNAMICS_LEAD_COLUMNS, isDynamicsLeadExport, suggestTarget, type ImportObject, type ImportOptions, type ImportRowResult, type ImportTargetOption } from "@/lib/crm/import-shared";
 import type { PropOption, UserLite } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import { DynamicsReview, type ReviewItem } from "./dynamics-review";
@@ -16,6 +16,8 @@ const MAX_ROWS = 20000;
 const VALIDATE_CHUNK = 100;
 // Small batches keep each request well inside serverless time limits (Netlify functions: ~10 s)
 const IMPORT_CHUNK = 50;
+// Rows with Dynamics Description / Caller Notes carry dozens of contacts, numbers and calls each
+const DYNAMICS_CHUNK = 2;
 
 type Step = "upload" | "map" | "review" | "running" | "done";
 interface Sheet {
@@ -154,7 +156,7 @@ export function ImportWizard({
     const col = (t: string) => columns.indexOf(t);
     const labelOf = (cells: (string | null)[]) => {
       const pick = (t: string) => (col(t) >= 0 ? cells[col(t)] : null);
-      const person = [pick("prop:firstName"), pick("prop:lastName")].filter(Boolean).join(" ") || pick("prop:email");
+      const person = [pick("prop:firstName") ?? pick("contactprop:firstName"), pick("prop:lastName") ?? pick("contactprop:lastName")].filter(Boolean).join(" ") || pick("prop:email");
       const company = pick("company:name") ?? pick("prop:name") ?? pick("company:domain") ?? pick("prop:domain");
       return [person, company].filter(Boolean).join(" · ") || "(no name)";
     };
@@ -173,6 +175,12 @@ export function ImportWizard({
   function applyMapping(headers: string[], tplId: string, rows: ImportRow[]) {
     const tpl = templates.find((t) => t.id === tplId);
     const taken = new Set<string>();
+    // A Dynamics lead export imported as companies maps itself: company, lead person, Description, Caller Notes
+    const dynamics = !tpl && object === "COMPANY" && isDynamicsLeadExport(headers);
+    if (dynamics) {
+      setColumns(headers.map((h) => DYNAMICS_LEAD_COLUMNS[h.trim()] ?? "skip").map((t) => (t === "skip" || targets.some((x) => x.value === t) ? t : "skip")));
+      return;
+    }
     // Dynamics free-text columns are recognised by their content, whatever the header says
     const sample = (i: number) => rows.slice(0, 200).map((r) => r.cells[i] ?? "");
     const cols = headers.map((h, i) => {
@@ -197,7 +205,9 @@ export function ImportWizard({
       setExcluded({});
       applyMapping(s.headers, templateId, s.rows);
       const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Dhaka" }).format(new Date());
-      setOptions((o) => ({ ...o, segmentName: `Import – ${file.name.replace(/\.[^.]+$/, "")} – ${today}` }));
+      // Dynamics exports use their own dropdown wording (sources, campaigns, research results): add it rather than reject rows
+      const dynamics = isDynamicsLeadExport(s.headers);
+      setOptions((o) => ({ ...o, segmentName: `Import – ${file.name.replace(/\.[^.]+$/, "")} – ${today}`, ...(dynamics ? { addMissingOptions: true } : {}) }));
       setStep("map");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't read the file");
@@ -222,7 +232,7 @@ export function ImportWizard({
         t.failed.push(r);
       } else {
         t[r.action]++;
-        if (r.message?.startsWith("Dynamics:")) t.dynamics++;
+        if (r.message?.includes("Dynamics:")) t.dynamics++;
       }
     }
     for (const a of added) if (!t.addedOptions.some((x) => x.property === a.property && x.value === a.value)) t.addedOptions.push(a);
@@ -263,24 +273,25 @@ export function ImportWizard({
     }
     const { jobId, segmentId } = start.data!;
     let cancelled = false;
-    for (let i = 0; i < sheet!.rows.length; i += IMPORT_CHUNK) {
+    const size = columns.includes(DYN_DESCRIPTION) || columns.includes(DYN_CALLER_NOTES) ? DYNAMICS_CHUNK : IMPORT_CHUNK;
+    for (let i = 0; i < sheet!.rows.length; i += size) {
       if (cancelRef.current) {
         cancelled = true;
         break;
       }
       const res = await importChunk(
         jobId,
-        sheet!.rows.slice(i, i + IMPORT_CHUNK).map((r) => (excluded[r.row]?.length ? { ...r, exclude: excluded[r.row] } : r)),
+        sheet!.rows.slice(i, i + size).map((r) => (excluded[r.row]?.length ? { ...r, exclude: excluded[r.row] } : r)),
       );
       if (!res.ok) {
         // A whole chunk failed (e.g. the server restarted): count its rows as errors and keep going
         add(
           t,
-          sheet!.rows.slice(i, i + IMPORT_CHUNK).map((r) => ({ row: r.row, action: "error" as const, message: res.error })),
+          sheet!.rows.slice(i, i + size).map((r) => ({ row: r.row, action: "error" as const, message: res.error })),
           [],
         );
       } else add(t, res.data!.results, res.data!.addedOptions);
-      setProgress(Math.min(1, (i + IMPORT_CHUNK) / sheet!.rows.length));
+      setProgress(Math.min(1, (i + size) / sheet!.rows.length));
     }
     await finishImport(jobId, { created: t.created, updated: t.updated, skipped: t.skipped, errors: t.errors, addedOptions: t.addedOptions.length, cancelled });
     setResult({ ...t, segmentId, cancelled });
@@ -376,6 +387,22 @@ export function ImportWizard({
               <ArrowLeft /> Choose another file
             </Button>
           </div>
+
+          {isDynamicsLeadExport(sheet.headers) &&
+            (object === "COMPANY" ? (
+              <p className="rounded-[4px] border border-line bg-surface-muted px-3 py-2 text-[13px]">
+                <strong>Dynamics CRM lead export recognised.</strong> Each row becomes a company with its lead person; the Description&apos;s targets become contacts linked
+                to the company, its numbers become the company&apos;s phone numbers, and Caller Notes become logged calls. Check the mapping below, then continue.
+              </p>
+            ) : (
+              <p className="rounded-[4px] border border-[#f5c26b] bg-warning-soft px-3 py-2 text-[13px]">
+                <strong>This is a Dynamics CRM lead export.</strong> Each row is a company with its targets, so import it as companies: every target is then created as a
+                contact and linked to its company.{" "}
+                <Link href="/import?object=companies" className="font-medium text-link hover:underline">
+                  Import as companies instead
+                </Link>
+              </p>
+            ))}
 
           <div className="thin-scroll overflow-x-auto rounded-[4px] border border-line">
             <table className="w-full min-w-[860px] text-[13px]">

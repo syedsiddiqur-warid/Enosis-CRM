@@ -88,16 +88,20 @@ export function enumOptions(def: PropDef, users: UserLite[]): PropOption[] {
 const OP_LABEL: Partial<Record<Operator, string>> = {
   is_any_of: "is any of",
   is_none_of: "is none of",
+  is_all_of: "has all of",
   is_known: "is known",
   is_unknown: "is unknown",
   contains: "contains",
   not_contains: "doesn't contain",
   is: "is",
   starts_with: "starts with",
+  ends_with: "ends with",
   eq: "is equal to",
   neq: "is not equal to",
   gt: "is greater than",
   lt: "is less than",
+  gte: "is at least",
+  lte: "is at most",
   between: "is between",
   on: "is",
   before: "is before",
@@ -111,11 +115,16 @@ const OP_LABEL: Partial<Record<Operator, string>> = {
 export function describeCondition(def: PropDef, c: FilterCondition, users: UserLite[]): string {
   if (c.operator === "is_known" || c.operator === "is_unknown") return OP_LABEL[c.operator]!;
   const v = c.value;
+  const short = (labels: string[]) => (labels.length > 2 ? `${labels.slice(0, 2).join(", ")} +${labels.length - 2}` : labels.join(", "));
   if (filterKind(def) === "enum") {
     const opts = enumOptions(def, users);
-    const labels = (Array.isArray(v) ? v : []).map((x) => opts.find((o) => o.value === x)?.label ?? String(x));
-    const list = labels.length > 2 ? `${labels.slice(0, 2).join(", ")} +${labels.length - 2}` : labels.join(", ");
-    return c.operator === "is_none_of" ? `none of ${list}` : list;
+    const list = short((Array.isArray(v) ? v : []).map((x) => opts.find((o) => o.value === x)?.label ?? String(x)));
+    return c.operator === "is_none_of" ? `none of ${list}` : c.operator === "is_all_of" ? `all of ${list}` : list;
+  }
+  // Text: a list of exact values
+  if (c.operator === "is_any_of" || c.operator === "is_none_of") {
+    const vals = Array.isArray(v) ? v.map(String) : [];
+    return `${c.operator === "is_none_of" ? "is none of" : "is any of"} ${short(vals)}`;
   }
   if (c.operator === "relative") {
     const r = (v ?? {}) as { preset?: string; days?: number };
@@ -185,11 +194,17 @@ function EnumEditor({ def, condition, users, onChange }: EditorProps) {
       <div className="border-b border-line p-3">
         <OperatorRadios
           value={op}
-          options={def.name === SEGMENT_PROPERTY ? ["is_any_of", "is_none_of"] : ["is_any_of", "is_none_of", "is_known", "is_unknown"]}
+          options={
+            def.name === SEGMENT_PROPERTY
+              ? ["is_any_of", "is_none_of"]
+              : def.type === "MULTI_ENUM"
+                ? ["is_any_of", "is_all_of", "is_none_of", "is_known", "is_unknown"]
+                : ["is_any_of", "is_none_of", "is_known", "is_unknown"]
+          }
           onChange={(o) => setValues(selected, o)}
         />
       </div>
-      {(op === "is_any_of" || op === "is_none_of") && (
+      {(op === "is_any_of" || op === "is_none_of" || op === "is_all_of") && (
         <>
           <div className="relative p-2">
             <Search className="pointer-events-none absolute left-4 top-1/2 size-3.5 -translate-y-1/2 text-ink-subtle" />
@@ -329,7 +344,7 @@ function NumberEditor({ def, condition, onChange }: EditorProps) {
   const v = condition?.value;
   const [a, setA] = useState(Array.isArray(v) ? String(v[0]) : v !== undefined ? String(v) : "");
   const [b, setB] = useState(Array.isArray(v) ? String(v[1]) : "");
-  const ops: Operator[] = ["eq", "neq", "gt", "lt", "between", "is_known", "is_unknown"];
+  const ops: Operator[] = ["eq", "neq", "gt", "gte", "lt", "lte", "between", "is_known", "is_unknown"];
   return (
     <div className="w-[260px]">
       <div className="space-y-2 p-3">
@@ -367,14 +382,18 @@ function NumberEditor({ def, condition, onChange }: EditorProps) {
   );
 }
 
+/** Values pasted one per line (or separated by commas / semicolons), e.g. a list of company domains. */
+const splitList = (s: string) => [...new Set(s.split(/[\n,;\t]+/).map((x) => x.trim()).filter(Boolean))];
+
 function TextEditor({ def, condition, onChange }: EditorProps) {
   const [op, setOp] = useState<Operator>(condition?.operator ?? "contains");
-  const [v, setV] = useState(String(condition?.value ?? ""));
-  const ops: Operator[] = ["contains", "not_contains", "is", "starts_with", "is_known", "is_unknown"];
+  const [v, setV] = useState(Array.isArray(condition?.value) ? (condition!.value as string[]).join("\n") : String(condition?.value ?? ""));
+  const ops: Operator[] = ["contains", "not_contains", "is", "is_any_of", "is_none_of", "starts_with", "ends_with", "is_known", "is_unknown"];
   const valueless = op === "is_known" || op === "is_unknown";
-  const apply = () => onChange(valueless ? { property: def.name, operator: op } : { property: def.name, operator: op, value: v });
+  const list = op === "is_any_of" || op === "is_none_of";
+  const apply = () => onChange(valueless ? { property: def.name, operator: op } : { property: def.name, operator: op, value: list ? splitList(v) : v });
   return (
-    <div className="w-[260px]">
+    <div className="w-[280px]">
       <div className="space-y-2 p-3">
         <Select value={op} onChange={(e) => setOp(e.target.value as Operator)}>
           {ops.map((o) => (
@@ -383,9 +402,23 @@ function TextEditor({ def, condition, onChange }: EditorProps) {
             </option>
           ))}
         </Select>
-        {!valueless && <Input autoFocus value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => e.key === "Enter" && v && apply()} />}
+        {list ? (
+          <>
+            <textarea
+              autoFocus
+              value={v}
+              onChange={(e) => setV(e.target.value)}
+              rows={5}
+              placeholder={"One value per line, e.g.\nacme.com\nglobex.com"}
+              className="w-full rounded-[3px] border border-line-strong bg-surface-muted px-2.5 py-1.5 text-[13px] focus:border-link focus:bg-surface focus:outline-none"
+            />
+            <p className="text-[12px] text-ink-subtle">{splitList(v).length} value{splitList(v).length === 1 ? "" : "s"} · exact match, upper/lower case ignored</p>
+          </>
+        ) : (
+          !valueless && <Input autoFocus value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => e.key === "Enter" && v && apply()} />
+        )}
       </div>
-      <ApplyRow onClear={() => onChange(undefined)} onApply={apply} disabled={!valueless && !v} />
+      <ApplyRow onClear={() => onChange(undefined)} onApply={apply} disabled={!valueless && !(list ? splitList(v).length : v)} />
     </div>
   );
 }

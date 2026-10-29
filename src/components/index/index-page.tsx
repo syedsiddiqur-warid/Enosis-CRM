@@ -69,6 +69,7 @@ import { PropertyPicker } from "./property-picker";
 import { AdvancedFiltersPanel, QuickFilterBar } from "./quick-filters";
 import { AddToSegmentButton } from "./segment-picker";
 import { ViewTabs } from "./view-tabs";
+import { ViewInsightsDrawer } from "@/components/segments/insights-panel";
 
 const PAGE_SIZES = [25, 50, 100];
 
@@ -90,6 +91,7 @@ export function IndexPage({ data }: { data: IndexData }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showFilters, setShowFilters] = useState(true);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [insightsOpen, setInsightsOpen] = useState(false);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(sp.get("create") === "1");
   const [propertyOpen, setPropertyOpen] = useState(false);
@@ -477,6 +479,7 @@ export function IndexPage({ data }: { data: IndexData }) {
           onQuickChange={onQuickChange}
           onChipsChange={(chips) => setViewState({ ...state, chips })}
           onOpenAdvanced={() => setAdvancedOpen(true)}
+          onOpenInsights={() => setInsightsOpen(true)}
         />
       )}
 
@@ -584,6 +587,18 @@ export function IndexPage({ data }: { data: IndexData }) {
       </div>
 
       {/* Overlays */}
+      <ViewInsightsDrawer
+        open={insightsOpen}
+        onOpenChange={setInsightsOpen}
+        object={object}
+        systemKey={activeView.systemKey}
+        state={state}
+        q={data.q}
+        onDrill={(c) => {
+          setInsightsOpen(false);
+          onQuickChange(c.property, c);
+        }}
+      />
       <AdvancedFiltersPanel
         object={object}
         open={advancedOpen}

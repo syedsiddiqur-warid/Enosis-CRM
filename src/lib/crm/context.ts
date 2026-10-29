@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { getPropDefs, getRelatedFilterDefs } from "./properties";
 import type { QueryContext, SegmentDefinition } from "./query";
-import type { CrmObject, FilterGroup, PropDef, RelatedDefs } from "./types";
+import type { CrmObject, FilterGroup, PropDef, RelatedDefs, SegmentExclusions } from "./types";
 
 /** Segment filters are stored as FilterGroup[]; tolerate a bare group or a view-style { advanced }. */
 export function parseSegmentGroups(filters: unknown): FilterGroup[] {
@@ -14,20 +14,26 @@ export function parseSegmentGroups(filters: unknown): FilterGroup[] {
   return [];
 }
 
+/** Stored exclusions, tolerating missing or partial values. */
+export function parseExclusions(v: unknown): SegmentExclusions {
+  const e = (v ?? {}) as Partial<SegmentExclusions>;
+  return { segments: Array.isArray(e.segments) ? e.segments.map(String) : [], records: Array.isArray(e.records) ? e.records.map(String) : [] };
+}
+
 /** Everything the filter engine needs: property definitions, related-row fields and segment definitions. */
 export async function loadQueryContext(userId: string): Promise<QueryContext & { defs: Record<CrmObject, PropDef[]>; relatedDefs: RelatedDefs }> {
   const [contactDefs, companyDefs, relatedDefs, segments] = await Promise.all([
     getPropDefs("CONTACT"),
     getPropDefs("COMPANY"),
     getRelatedFilterDefs(),
-    db.segment.findMany({ select: { id: true, objectType: true, type: true, filters: true } }),
+    db.segment.findMany({ select: { id: true, objectType: true, type: true, filters: true, exclusions: true } }),
   ]);
   return {
     userId,
     defs: { CONTACT: contactDefs, COMPANY: companyDefs, DEAL: [] },
     relatedDefs,
     segments: new Map(
-      segments.map((s): [string, SegmentDefinition] => [s.id, { objectType: s.objectType as CrmObject, type: s.type, groups: parseSegmentGroups(s.filters) }]),
+      segments.map((s): [string, SegmentDefinition] => [s.id, { objectType: s.objectType as CrmObject, type: s.type, groups: parseSegmentGroups(s.filters), exclusions: parseExclusions(s.exclusions) }]),
     ),
   };
 }

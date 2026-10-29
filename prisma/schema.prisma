@@ -261,6 +261,7 @@ model Contact {
   linkedinUrl           String?
   city                  String?
   country               String?
+  state                 String?
   timeZone              String?
   inDbnd                String? // yes / no / unknown
   interestLevel         String?
@@ -549,12 +550,26 @@ model Segment {
   type       SegmentType
   // Active segments: FilterGroup[] (groups OR'ed, conditions inside a group use the group's op)
   filters    Json?
+  // Records left out even when they match or were added: { segments: string[], records: string[] }
+  exclusions  Json?
+  description String?
   ownerId    String?
   owner      User?           @relation(fields: [ownerId], references: [id], onDelete: SetNull)
   visibility Visibility      @default(EVERYONE)
   createdAt  DateTime        @default(now())
   updatedAt  DateTime        @updatedAt
   members    SegmentMember[]
+  snapshots  SegmentSnapshot[]
+}
+
+/// One size reading per segment per day (Asia/Dhaka), for the 7-day change
+model SegmentSnapshot {
+  segmentId String
+  day       String // YYYY-MM-DD
+  size      Int
+  segment   Segment @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+
+  @@id([segmentId, day])
 }
 
 model SegmentMember {

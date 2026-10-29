@@ -21,18 +21,34 @@ export function initials(name: string | null | undefined) {
 }
 
 /** +18135550100 → +1 (813) 555-0100 */
+const EXT = /\s*(?:ext\.?|x|;ext=)\s*(\d{1,8})\s*$/i;
+
+/** "+18135550100 ext. 204" → { number: "+18135550100", extension: "204" } */
+export function splitPhone(value: string | null | undefined): { number: string; extension: string | null } {
+  const v = (value ?? "").trim();
+  const m = v.match(EXT);
+  return m ? { number: v.slice(0, m.index).trim(), extension: m[1] } : { number: v, extension: null };
+}
+
 export function formatPhone(e164: string | null | undefined) {
   if (!e164) return "";
-  const m = e164.match(/^\+1(\d{3})(\d{3})(\d{4})$/);
-  return m ? `+1 (${m[1]}) ${m[2]}-${m[3]}` : e164;
+  const { number, extension } = splitPhone(e164);
+  const m = number.match(/^\+1(\d{3})(\d{3})(\d{4})$/);
+  return `${m ? `+1 (${m[1]}) ${m[2]}-${m[3]}` : number}${extension ? ` ext. ${extension}` : ""}`;
+}
+
+/** tel: link for a stored phone value; the extension is dialed after a pause. */
+export function phoneHref(value: string) {
+  const { number, extension } = splitPhone(value);
+  return `tel:${number.replace(/[^\d+]/g, "")}${extension ? `,${extension}` : ""}`;
 }
 
 /** "+1 (813) 555-0100" → "+18135550100" (10-digit numbers are US). Null when it isn't a phone number. */
 export function toE164(raw: string): string | null {
   const digits = raw.replace(/\D/g, "");
+  if (raw.trim().startsWith("+") && digits.length >= 8) return `+${digits}`;
   if (digits.length === 10) return `+1${digits}`;
   if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
-  if (raw.trim().startsWith("+") && digits.length >= 8) return `+${digits}`;
   return digits.length >= 7 ? digits : null;
 }
 

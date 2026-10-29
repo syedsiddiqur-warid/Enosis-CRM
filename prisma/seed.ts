@@ -16,6 +16,7 @@ import {
   PROPERTY_GROUPS,
   TECHNOLOGIES,
 } from "../src/lib/crm/defaults";
+import { syncGeoRecords } from "../src/lib/crm/metadata-sync";
 
 const db = new PrismaClient();
 
@@ -260,7 +261,7 @@ async function seedMetadata() {
 async function seedLayouts(teams: { callers: { id: string }; research: { id: string } }) {
   const contactLayout = {
     left: {
-      keyInfo: ["ownerId", "phone", "city", "timeZone", "lifecycleStage", "leadStatus", "lastContactedAt", "callStatus", "crtCount", "nextFollowUpAt"],
+      keyInfo: ["ownerId", "phone", "city", "state", "country", "timeZone", "lifecycleStage", "leadStatus", "lastContactedAt", "callStatus", "crtCount", "nextFollowUpAt"],
       cards: [
         { id: "about", title: "About this contact", group: "contact_info" },
         { id: "research", title: "Research", group: "research" },
@@ -298,7 +299,7 @@ async function seedLayouts(teams: { callers: { id: string }; research: { id: str
   };
   const companyLayout = {
     left: {
-      keyInfo: ["ownerId", "domain", "phone", "industry", "employees", "country", "timeZone", "leadState", "source", "callStatus", "crtCount", "lastCallAt"],
+      keyInfo: ["ownerId", "domain", "phone", "industry", "employees", "country", "state", "timeZone", "leadState", "source", "callStatus", "crtCount", "lastCallAt"],
       cards: [
         { id: "about", title: "About this company", group: "company_info" },
         { id: "firmographics", title: "Firmographics", group: "firmographics" },
@@ -632,6 +633,7 @@ async function seedRecords(users: { id: string }[]) {
           phone: rand() > 0.5 ? `${company.phone?.slice(0, -2)}${10 + k}` : null,
           city: company.city,
           country: company.country,
+          state: company.state,
           timeZone: company.timeZone,
           inDbnd: pick(["yes", "no", "unknown"]),
           interestLevel: crt > 0 ? pick(["High", "Medium", "Low", "None"]) : null,
@@ -1068,6 +1070,8 @@ async function main() {
     return;
   }
   const summary = await seedRecords(users);
+  // Sample places use state codes ("TX"); store full names and the time zones they imply
+  await syncGeoRecords(db);
   console.log(`Seeded ${users.length} users, ${summary.companies} companies, ${summary.contacts} contacts.`);
 }
 

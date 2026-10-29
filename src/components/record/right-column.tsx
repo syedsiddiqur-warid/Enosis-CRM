@@ -3,14 +3,14 @@
 import { Copy, MoreHorizontal, Phone, Plus, Search } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { CompanyLogo, Pill, copyText } from "@/components/index/values";
+import { CompanyLogo, LocalTime, Pill, copyText } from "@/components/index/values";
 import { Button, Input } from "@/components/ui/button";
 import { Checkbox, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, Popover, PopoverAnchor, PopoverContent, PopoverTrigger, Tooltip } from "@/components/ui/overlays";
 import { searchCompanies } from "@/lib/crm/actions";
 import { formatDate, friendlyDateTime } from "@/lib/crm/dates";
 import { associate, dissociate, searchContacts, setAssociationLabels, setPrimaryCompany } from "@/lib/crm/record-actions";
 import type { LayoutConfig } from "@/lib/crm/record-types";
-import { cn, formatNumber, formatPhone } from "@/lib/utils";
+import { cn, formatNumber, formatPhone, phoneHref } from "@/lib/utils";
 import { deletePhoneNumber, savePhoneNumber, setPhoneStatus, type PhoneInput } from "@/lib/crm/phone-actions";
 import { CampaignsCard, LeadJourneyCard, SignalsCard } from "./company-cards";
 import { PhoneDialog } from "./phone-dialog";
@@ -189,7 +189,7 @@ function CompaniesCard({ card }: { card: CardConfig }) {
                   </div>
                 )}
                 {c.phone && (
-                  <a href={`tel:${c.phone}`} className="mt-0.5 block tabular-nums text-ink-muted hover:text-link">
+                  <a href={phoneHref(c.phone)} className="mt-0.5 block tabular-nums text-ink-muted hover:text-link">
                     {formatPhone(c.phone)}
                   </a>
                 )}
@@ -269,6 +269,11 @@ function ContactsCard({ card }: { card: CardConfig }) {
                 ))}
               </div>
               {c.jobTitle && <div className="text-ink-muted">{c.jobTitle}</div>}
+              {c.timeZone && (
+                <div className="mt-0.5 text-[12px] text-ink-muted">
+                  <LocalTime tz={c.timeZone} suffix="local time" icon />
+                </div>
+              )}
               {c.email && (
                 <a href={`mailto:${c.email}`} className="block truncate text-[12px] text-link hover:underline">
                   {c.email}

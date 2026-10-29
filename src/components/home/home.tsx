@@ -1,32 +1,74 @@
 "use client";
 
-import { Building2, CalendarDays, Check, ExternalLink, Megaphone, Play, UserRound, X } from "lucide-react";
+import {
+  Building2,
+  CalendarDays,
+  Check,
+  ExternalLink,
+  Megaphone,
+  Play,
+  UserRound,
+  X,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
-import { CompanyLogo, Pill } from "@/components/index/values";
+import { CompanyLogo, LocalTime, Pill } from "@/components/index/values";
 import { Button } from "@/components/ui/button";
-import { friendlyDateTime, localTime } from "@/lib/crm/dates";
+import { friendlyDateTime } from "@/lib/crm/dates";
 import type { HomeData } from "@/lib/crm/home-loader";
 import { setTasksDone } from "@/lib/crm/task-actions";
 import { cn } from "@/lib/utils";
 
 const TZ = "Asia/Dhaka";
-const time = (iso: string | null) => (iso ? new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }).format(new Date(iso)) : "");
-const weekday = (key: string) => new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(new Date(`${key}T12:00:00Z`));
+const time = (iso: string | null) =>
+  iso
+    ? new Intl.DateTimeFormat("en-US", {
+        timeZone: TZ,
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(new Date(iso))
+    : "";
+const weekday = (key: string) =>
+  new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    weekday: "short",
+  }).format(new Date(`${key}T12:00:00Z`));
 
 function greeting() {
-  const h = Number(new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric", hourCycle: "h23" }).format(new Date()));
+  const h = Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: TZ,
+      hour: "numeric",
+      hourCycle: "h23",
+    }).format(new Date()),
+  );
   return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
 }
 
-function Card({ title, count, actions, children, className }: { title: string; count?: number; actions?: React.ReactNode; children: React.ReactNode; className?: string }) {
+function Card({
+  title,
+  count,
+  actions,
+  children,
+  className,
+}: {
+  title: string;
+  count?: number;
+  actions?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <section className={cn("rounded-[6px] border border-line bg-surface", className)}>
+    <section
+      className={cn("rounded-[6px] border border-line bg-surface", className)}
+    >
       <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
         <h2 className="flex-1 text-[14px] font-semibold">
           {title}
-          {count !== undefined && <span className="ml-1 font-normal text-ink-subtle">({count})</span>}
+          {count !== undefined && (
+            <span className="ml-1 font-normal text-ink-subtle">({count})</span>
+          )}
         </h2>
         {actions}
       </div>
@@ -42,7 +84,10 @@ function Empty({ children }: { children: React.ReactNode }) {
 export function Home({ data }: { data: HomeData }) {
   const router = useRouter();
   const [, start] = useTransition();
-  const [toast, setToast] = useState<{ message: string; undo?: () => Promise<unknown> } | null>(null);
+  const [toast, setToast] = useState<{
+    message: string;
+    undo?: () => Promise<unknown>;
+  } | null>(null);
   const [hello, setHello] = useState("Hello");
   const s = data.stats;
   const startToday = new Date(data.startToday).getTime();
@@ -60,18 +105,41 @@ export function Home({ data }: { data: HomeData }) {
     start(async () => {
       const res = await setTasksDone([id], true);
       if (!res.ok) return setToast({ message: res.error });
-      setToast({ message: `Completed “${title}”`, undo: () => setTasksDone([id], false) });
+      setToast({
+        message: `Completed “${title}”`,
+        undo: () => setTasksDone([id], false),
+      });
       router.refresh();
     });
 
   const followGroups = [
-    ["Overdue", data.followUps.filter((f) => new Date(f.at).getTime() < startToday)],
-    ["Today", data.followUps.filter((f) => new Date(f.at).getTime() >= startToday && new Date(f.at).getTime() <= endToday)],
-    ["Next 7 days", data.followUps.filter((f) => new Date(f.at).getTime() > endToday)],
+    [
+      "Overdue",
+      data.followUps.filter((f) => new Date(f.at).getTime() < startToday),
+    ],
+    [
+      "Today",
+      data.followUps.filter(
+        (f) =>
+          new Date(f.at).getTime() >= startToday &&
+          new Date(f.at).getTime() <= endToday,
+      ),
+    ],
+    [
+      "Next 7 days",
+      data.followUps.filter((f) => new Date(f.at).getTime() > endToday),
+    ],
   ] as const;
   const maxDay = Math.max(1, ...s.perDay.map((d) => d.calls));
-  const rate = s.week.calls ? Math.round((s.week.connects / s.week.calls) * 100) : null;
-  const dateLabel = new Intl.DateTimeFormat("en-US", { timeZone: TZ, weekday: "long", month: "long", day: "numeric" }).format(new Date());
+  const rate = s.week.calls
+    ? Math.round((s.week.connects / s.week.calls) * 100)
+    : null;
+  const dateLabel = new Intl.DateTimeFormat("en-US", {
+    timeZone: TZ,
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  }).format(new Date());
 
   return (
     <div className="thin-scroll h-full overflow-y-auto">
@@ -86,17 +154,30 @@ export function Home({ data }: { data: HomeData }) {
               {data.taskCounts.today + data.taskCounts.overdue
                 ? `${data.taskCounts.today} task${data.taskCounts.today === 1 ? "" : "s"} due today${data.taskCounts.overdue ? `, ${data.taskCounts.overdue} overdue` : ""}`
                 : "no tasks due"}
-              {data.meetings.length ? ` · ${data.meetings.length} meeting${data.meetings.length === 1 ? "" : "s"} today` : ""}
+              {data.meetings.length
+                ? ` · ${data.meetings.length} meeting${data.meetings.length === 1 ? "" : "s"} today`
+                : ""}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
             {data.taskCounts.overdue > 0 && (
               <Button variant="secondary" asChild>
-                <Link href="/tasks/start?tab=overdue">Start {data.taskCounts.overdue} overdue</Link>
+                <Link href="/tasks/start?tab=overdue">
+                  Start {data.taskCounts.overdue} overdue
+                </Link>
               </Button>
             )}
-            <Button variant="primary" asChild aria-disabled={!data.taskCounts.today}>
-              <Link href="/tasks/start?tab=today" className={cn(!data.taskCounts.today && "pointer-events-none opacity-50")}>
+            <Button
+              variant="primary"
+              asChild
+              aria-disabled={!data.taskCounts.today}
+            >
+              <Link
+                href="/tasks/start?tab=today"
+                className={cn(
+                  !data.taskCounts.today && "pointer-events-none opacity-50",
+                )}
+              >
                 <Play /> Start {data.taskCounts.today} due today
               </Link>
             </Button>
@@ -108,21 +189,39 @@ export function Home({ data }: { data: HomeData }) {
           </div>
         </section>
 
-        <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6" aria-label="My call stats">
+        <section
+          className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6"
+          aria-label="My call stats"
+        >
           {(
             [
               ["Calls today", s.today.calls, null],
               ["Connects today", s.today.connects, null],
-              ["Connect rate, 7 days", rate === null ? "--" : `${rate}%`, `${s.week.connects} of ${s.week.calls} calls`],
+              [
+                "Connect rate, 7 days",
+                rate === null ? "--" : `${rate}%`,
+                `${s.week.connects} of ${s.week.calls} calls`,
+              ],
               ["Meetings booked, 7 days", s.meetingsBooked, null],
-              ["Talk time today", `${Math.floor(s.talkSec / 60)}m`, s.talkSec ? null : "from logged durations"],
+              [
+                "Talk time today",
+                `${Math.floor(s.talkSec / 60)}m`,
+                s.talkSec ? null : "from logged durations",
+              ],
               ["Tasks done today", s.tasksDoneToday, null],
             ] as const
           ).map(([label, value, hint]) => (
-            <div key={label} className="rounded-[6px] border border-line bg-surface px-4 py-3">
-              <div className="text-[22px] font-medium tabular-nums">{value}</div>
+            <div
+              key={label}
+              className="rounded-[6px] border border-line bg-surface px-4 py-3"
+            >
+              <div className="text-[22px] font-medium tabular-nums">
+                {value}
+              </div>
               <div className="text-[12px] text-ink-muted">{label}</div>
-              {hint && <div className="text-[11px] text-ink-subtle">{hint}</div>}
+              {hint && (
+                <div className="text-[11px] text-ink-subtle">{hint}</div>
+              )}
             </div>
           ))}
         </section>
@@ -133,7 +232,10 @@ export function Home({ data }: { data: HomeData }) {
               title="My tasks due today and overdue"
               count={data.taskCounts.today + data.taskCounts.overdue}
               actions={
-                <Link href="/tasks" className="text-[13px] text-link hover:underline">
+                <Link
+                  href="/tasks"
+                  className="text-[13px] text-link hover:underline"
+                >
                   All tasks
                 </Link>
               }
@@ -141,10 +243,15 @@ export function Home({ data }: { data: HomeData }) {
               {data.tasks.length ? (
                 <ul>
                   {data.tasks.map((t) => {
-                    const overdue = t.dueAt && new Date(t.dueAt).getTime() < startToday;
-                    const late = t.dueAt && new Date(t.dueAt).getTime() < Date.now();
+                    const overdue =
+                      t.dueAt && new Date(t.dueAt).getTime() < startToday;
+                    const late =
+                      t.dueAt && new Date(t.dueAt).getTime() < Date.now();
                     return (
-                      <li key={t.id} className="flex items-start gap-3 border-b border-line px-4 py-2.5 last:border-b-0">
+                      <li
+                        key={t.id}
+                        className="flex items-start gap-3 border-b border-line px-4 py-2.5 last:border-b-0"
+                      >
                         <button
                           onClick={() => complete(t.id, t.title)}
                           aria-label={`Complete ${t.title}`}
@@ -156,12 +263,18 @@ export function Home({ data }: { data: HomeData }) {
                           <div className="font-medium">{t.title}</div>
                           <div className="flex flex-wrap gap-x-2 text-[12px] text-ink-muted">
                             {t.contact && (
-                              <Link href={`/contacts/${t.contact.id}`} className="text-link hover:underline">
+                              <Link
+                                href={`/contacts/${t.contact.id}`}
+                                className="text-link hover:underline"
+                              >
                                 {t.contact.name}
                               </Link>
                             )}
                             {t.company && (
-                              <Link href={`/companies/${t.company.id}`} className="hover:underline">
+                              <Link
+                                href={`/companies/${t.company.id}`}
+                                className="hover:underline"
+                              >
                                 {t.company.name}
                               </Link>
                             )}
@@ -169,8 +282,20 @@ export function Home({ data }: { data: HomeData }) {
                           </div>
                         </div>
                         <div className="shrink-0 text-right text-[12px]">
-                          <div className={cn(late ? "font-medium text-danger" : "text-ink-muted")}>{overdue ? friendlyDateTime(t.dueAt) : time(t.dueAt)}</div>
-                          {t.priority === "High" && <Pill label="High" color="#f2545b" />}
+                          <div
+                            className={cn(
+                              late
+                                ? "font-medium text-danger"
+                                : "text-ink-muted",
+                            )}
+                          >
+                            {overdue
+                              ? friendlyDateTime(t.dueAt)
+                              : time(t.dueAt)}
+                          </div>
+                          {t.priority === "High" && (
+                            <Pill label="High" color="#f2545b" />
+                          )}
                         </div>
                       </li>
                     );
@@ -185,23 +310,43 @@ export function Home({ data }: { data: HomeData }) {
               {data.meetings.length ? (
                 <ul>
                   {data.meetings.map((m) => {
-                    const past = m.endAt ? new Date(m.endAt).getTime() < Date.now() : m.startAt ? new Date(m.startAt).getTime() < Date.now() : false;
+                    const past = m.endAt
+                      ? new Date(m.endAt).getTime() < Date.now()
+                      : m.startAt
+                        ? new Date(m.startAt).getTime() < Date.now()
+                        : false;
                     return (
-                      <li key={m.id} className={cn("flex items-start gap-3 border-b border-line px-4 py-2.5 last:border-b-0", past && "opacity-60")}>
+                      <li
+                        key={m.id}
+                        className={cn(
+                          "flex items-start gap-3 border-b border-line px-4 py-2.5 last:border-b-0",
+                          past && "opacity-60",
+                        )}
+                      >
                         <div className="w-[72px] shrink-0 text-[13px] font-medium tabular-nums">
                           {time(m.startAt)}
-                          {m.endAt && <div className="text-[11px] font-normal text-ink-subtle">to {time(m.endAt)}</div>}
+                          {m.endAt && (
+                            <div className="text-[11px] font-normal text-ink-subtle">
+                              to {time(m.endAt)}
+                            </div>
+                          )}
                         </div>
                         <div className="min-w-0 flex-1 text-[13px]">
                           <div className="font-medium">{m.title}</div>
                           <div className="flex flex-wrap gap-x-2 text-[12px] text-ink-muted">
                             {m.contact && (
-                              <Link href={`/contacts/${m.contact.id}`} className="text-link hover:underline">
+                              <Link
+                                href={`/contacts/${m.contact.id}`}
+                                className="text-link hover:underline"
+                              >
                                 {m.contact.name}
                               </Link>
                             )}
                             {m.company && (
-                              <Link href={`/companies/${m.company.id}`} className="hover:underline">
+                              <Link
+                                href={`/companies/${m.company.id}`}
+                                className="hover:underline"
+                              >
                                 {m.company.name}
                               </Link>
                             )}
@@ -209,11 +354,18 @@ export function Home({ data }: { data: HomeData }) {
                           </div>
                           {m.location &&
                             (/^https?:\/\//.test(m.location) ? (
-                              <a href={m.location} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-[12px] text-link hover:underline">
+                              <a
+                                href={m.location}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="flex items-center gap-1 text-[12px] text-link hover:underline"
+                              >
                                 Join <ExternalLink className="size-3" />
                               </a>
                             ) : (
-                              <div className="text-[12px] text-ink-subtle">{m.location}</div>
+                              <div className="text-[12px] text-ink-subtle">
+                                {m.location}
+                              </div>
                             ))}
                         </div>
                         {m.meetingOutcome && <Pill label={m.meetingOutcome} />}
@@ -224,25 +376,62 @@ export function Home({ data }: { data: HomeData }) {
               ) : (
                 <Empty>
                   <CalendarDays className="mr-1 inline size-4" />
-                  No meetings today. Meetings you log or schedule on a record show here.
+                  No meetings today. Meetings you log or schedule on a record
+                  show here.
                 </Empty>
               )}
             </Card>
 
-            <Card title="My calls, last 7 days" actions={<span className="text-[12px] text-ink-subtle">{s.week.calls} calls</span>}>
-              <div className="flex items-end gap-2 px-4 pt-4" style={{ height: 130 }} aria-label="Calls per day">
+            <Card
+              title="My calls, last 7 days"
+              actions={
+                <span className="text-[12px] text-ink-subtle">
+                  {s.week.calls} calls
+                </span>
+              }
+            >
+              <div
+                className="flex items-end gap-2 px-4 pt-4"
+                style={{ height: 130 }}
+                aria-label="Calls per day"
+              >
                 {s.perDay.map((d) => (
-                  <div key={d.day} className="flex flex-1 flex-col items-center justify-end gap-1" title={`${d.day}: ${d.calls} calls, ${d.connects} connects`}>
-                    <span className="text-[11px] tabular-nums text-ink-muted">{d.calls || ""}</span>
-                    <div className="flex w-full max-w-[36px] flex-col justify-end overflow-hidden rounded-t-[3px] bg-[#9fd8e3]" style={{ height: `${(d.calls / maxDay) * 80}px`, minHeight: d.calls ? 4 : 0 }}>
-                      <div className="bg-[#00bda5]" style={{ height: d.calls ? `${(d.connects / d.calls) * 100}%` : 0 }} />
+                  <div
+                    key={d.day}
+                    className="flex flex-1 flex-col items-center justify-end gap-1"
+                    title={`${d.day}: ${d.calls} calls, ${d.connects} connects`}
+                  >
+                    <span className="text-[11px] tabular-nums text-ink-muted">
+                      {d.calls || ""}
+                    </span>
+                    <div
+                      className="flex w-full max-w-[36px] flex-col justify-end overflow-hidden rounded-t-[3px] bg-[#9fd8e3]"
+                      style={{
+                        height: `${(d.calls / maxDay) * 80}px`,
+                        minHeight: d.calls ? 4 : 0,
+                      }}
+                    >
+                      <div
+                        className="bg-[#00bda5]"
+                        style={{
+                          height: d.calls
+                            ? `${(d.connects / d.calls) * 100}%`
+                            : 0,
+                        }}
+                      />
                     </div>
                   </div>
                 ))}
               </div>
               <div className="flex gap-2 px-4 pb-1">
                 {s.perDay.map((d, i) => (
-                  <div key={d.day} className={cn("flex-1 text-center text-[11px]", i === 6 ? "font-semibold" : "text-ink-subtle")}>
+                  <div
+                    key={d.day}
+                    className={cn(
+                      "flex-1 text-center text-[11px]",
+                      i === 6 ? "font-semibold" : "text-ink-subtle",
+                    )}
+                  >
                     {i === 6 ? "Today" : weekday(d.day)}
                   </div>
                 ))}
@@ -258,12 +447,25 @@ export function Home({ data }: { data: HomeData }) {
               {s.outcomes.length > 0 ? (
                 <div className="space-y-1 border-t border-line px-4 py-3">
                   {s.outcomes.map((o) => (
-                    <div key={o.result} className="flex items-center gap-2 text-[12px]">
-                      <span className="w-[160px] shrink-0 truncate">{o.result}</span>
-                      <span className="flex-1">
-                        <span className="block h-2 rounded-full bg-[#ff8f59]" style={{ width: `${(o.count / s.outcomes[0].count) * 100}%`, minWidth: 4 }} />
+                    <div
+                      key={o.result}
+                      className="flex items-center gap-2 text-[12px]"
+                    >
+                      <span className="w-[160px] shrink-0 truncate">
+                        {o.result}
                       </span>
-                      <span className="w-6 text-right tabular-nums text-ink-muted">{o.count}</span>
+                      <span className="flex-1">
+                        <span
+                          className="block h-2 rounded-full bg-[#ff8f59]"
+                          style={{
+                            width: `${(o.count / s.outcomes[0].count) * 100}%`,
+                            minWidth: 4,
+                          }}
+                        />
+                      </span>
+                      <span className="w-6 text-right tabular-nums text-ink-muted">
+                        {o.count}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -279,30 +481,71 @@ export function Home({ data }: { data: HomeData }) {
                 followGroups.map(([label, list]) =>
                   list.length ? (
                     <div key={label}>
-                      <div className={cn("bg-surface-muted px-4 py-1 text-[11px] font-semibold uppercase tracking-wide", label === "Overdue" ? "text-danger" : "text-ink-subtle")}>
+                      <div
+                        className={cn(
+                          "bg-surface-muted px-4 py-1 text-[11px] font-semibold uppercase tracking-wide",
+                          label === "Overdue"
+                            ? "text-danger"
+                            : "text-ink-subtle",
+                        )}
+                      >
                         {label} ({list.length})
                       </div>
                       <ul>
                         {list.map((f, i) => (
-                          <li key={`${f.kind}${f.id}${f.campaign?.id ?? ""}${i}`} className="flex items-start gap-3 border-b border-line px-4 py-2 last:border-b-0">
-                            {f.kind === "contact" ? <UserRound className="mt-0.5 size-4 shrink-0 text-ink-subtle" /> : <Building2 className="mt-0.5 size-4 shrink-0 text-ink-subtle" />}
+                          <li
+                            key={`${f.kind}${f.id}${f.campaign?.id ?? ""}${i}`}
+                            className="flex items-start gap-3 border-b border-line px-4 py-2 last:border-b-0"
+                          >
+                            {f.kind === "contact" ? (
+                              <UserRound className="mt-0.5 size-4 shrink-0 text-ink-subtle" />
+                            ) : (
+                              <Building2 className="mt-0.5 size-4 shrink-0 text-ink-subtle" />
+                            )}
                             <div className="min-w-0 flex-1 text-[13px]">
-                              <Link href={`/${f.kind === "contact" ? "contacts" : "companies"}/${f.id}`} className="font-medium text-link hover:underline">
+                              <Link
+                                href={`/${f.kind === "contact" ? "contacts" : "companies"}/${f.id}`}
+                                className="font-medium text-link hover:underline"
+                              >
                                 {f.name}
                               </Link>
-                              {f.subtitle && <div className="truncate text-[12px] text-ink-muted">{f.subtitle}</div>}
+                              {f.subtitle && (
+                                <div className="truncate text-[12px] text-ink-muted">
+                                  {f.subtitle}
+                                </div>
+                              )}
                               <div className="flex flex-wrap gap-x-2 text-[12px] text-ink-subtle">
                                 {f.campaign ? (
-                                  <Link href={`/prospecting/${f.campaign.id}?id=${f.id}`} className="text-link hover:underline">
+                                  <Link
+                                    href={`/prospecting/${f.campaign.id}?id=${f.id}`}
+                                    className="text-link hover:underline"
+                                  >
                                     Campaign callback · {f.campaign.name}
                                   </Link>
                                 ) : (
-                                  <span>Next follow-up{f.detail ? ` · ${f.detail}` : ""}</span>
+                                  <span>
+                                    Next follow-up
+                                    {f.detail ? ` · ${f.detail}` : ""}
+                                  </span>
                                 )}
-                                {f.timeZone && <span>{localTime(f.timeZone)} their time</span>}
+                                {f.timeZone && (
+                                  <LocalTime
+                                    tz={f.timeZone}
+                                    suffix="their time"
+                                  />
+                                )}
                               </div>
                             </div>
-                            <span className={cn("shrink-0 text-[12px]", label === "Overdue" ? "font-medium text-danger" : "text-ink-muted")}>{friendlyDateTime(f.at)}</span>
+                            <span
+                              className={cn(
+                                "shrink-0 text-[12px]",
+                                label === "Overdue"
+                                  ? "font-medium text-danger"
+                                  : "text-ink-muted",
+                              )}
+                            >
+                              {friendlyDateTime(f.at)}
+                            </span>
                           </li>
                         ))}
                       </ul>
@@ -310,7 +553,10 @@ export function Home({ data }: { data: HomeData }) {
                   ) : null,
                 )
               ) : (
-                <Empty>No follow-ups due in the next 7 days on records you own or campaign companies assigned to you.</Empty>
+                <Empty>
+                  No follow-ups due in the next 7 days on records you own or
+                  campaign companies assigned to you.
+                </Empty>
               )}
             </Card>
 
@@ -319,19 +565,34 @@ export function Home({ data }: { data: HomeData }) {
                 <ul>
                   {data.recent.map((r) => (
                     <li key={`${r.kind}${r.id}`}>
-                      <Link href={`/${r.kind === "contact" ? "contacts" : "companies"}/${r.id}`} className="flex items-center gap-3 border-b border-line px-4 py-2 last:border-b-0 hover:bg-surface-hover">
+                      <Link
+                        href={`/${r.kind === "contact" ? "contacts" : "companies"}/${r.id}`}
+                        className="flex items-center gap-3 border-b border-line px-4 py-2 last:border-b-0 hover:bg-surface-hover"
+                      >
                         {r.kind === "company" ? (
-                          <CompanyLogo name={r.name} domain={r.domain} size={24} />
+                          <CompanyLogo
+                            name={r.name}
+                            domain={r.domain}
+                            size={24}
+                          />
                         ) : (
                           <span className="flex size-6 items-center justify-center rounded-full bg-surface-muted">
                             <UserRound className="size-3.5 text-ink-muted" />
                           </span>
                         )}
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[13px] font-medium text-link">{r.name}</span>
-                          {r.subtitle && <span className="block truncate text-[12px] text-ink-muted">{r.subtitle}</span>}
+                          <span className="block truncate text-[13px] font-medium text-link">
+                            {r.name}
+                          </span>
+                          {r.subtitle && (
+                            <span className="block truncate text-[12px] text-ink-muted">
+                              {r.subtitle}
+                            </span>
+                          )}
                         </span>
-                        <span className="shrink-0 text-[12px] text-ink-subtle">{friendlyDateTime(r.viewedAt)}</span>
+                        <span className="shrink-0 text-[12px] text-ink-subtle">
+                          {friendlyDateTime(r.viewedAt)}
+                        </span>
                       </Link>
                     </li>
                   ))}
@@ -345,7 +606,10 @@ export function Home({ data }: { data: HomeData }) {
       </div>
 
       {toast && (
-        <div role="status" className="fixed bottom-5 left-1/2 z-50 flex -translate-x-1/2 items-center gap-4 rounded-[4px] bg-[#2d3e50] px-4 py-2.5 text-[13px] text-white shadow-lg">
+        <div
+          role="status"
+          className="fixed bottom-5 left-1/2 z-50 flex -translate-x-1/2 items-center gap-4 rounded-[4px] bg-[#2d3e50] px-4 py-2.5 text-[13px] text-white shadow-lg"
+        >
           {toast.message}
           {toast.undo && (
             <button

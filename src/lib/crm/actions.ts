@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/auth";
 import { db } from "@/lib/db";
 import { OBJECT_LABELS } from "./defaults";
+import { normalizeCountry, normalizeRegion, timeZoneFor } from "./geo";
 import { PAGE_SIZES, viewPrefsKey, visibleViews, type ViewTabPrefs } from "./index-loader";
 import { applyUpdate } from "./record-writes";
 import type { CrmObject, PropOption, PropType, ViewState } from "./types";
@@ -81,6 +82,13 @@ export async function restoreRecords(object: CrmObject, ids: string[]): Promise<
 
 // ── Create records ──
 
+/** Country, state/province and the time zone they imply */
+function location(country?: string, state?: string) {
+  const c = country?.trim() ? normalizeCountry(country) : null;
+  const s = state?.trim() ? normalizeRegion(c, state) : null;
+  return { country: c, state: s, timeZone: timeZoneFor(c, s) };
+}
+
 export async function createContact(input: {
   firstName?: string;
   lastName?: string;
@@ -124,7 +132,7 @@ export async function createContact(input: {
   }
 }
 
-export async function createCompany(input: { name: string; domain?: string; industry?: string; city?: string; country?: string; ownerId?: string; phone?: string }): Promise<Result<{ id: string }>> {
+export async function createCompany(input: { name: string; domain?: string; industry?: string; city?: string; country?: string; state?: string; ownerId?: string; phone?: string }): Promise<Result<{ id: string }>> {
   try {
     const user = await requireUser();
     if (!input.name?.trim()) throw new Error("Company name is required");
@@ -145,7 +153,7 @@ export async function createCompany(input: { name: string; domain?: string; indu
         domain,
         industry: input.industry || null,
         city: input.city?.trim() || null,
-        country: input.country?.trim() || null,
+        ...location(input.country, input.state),
         phone: input.phone?.trim() || null,
         ownerId: input.ownerId || null,
         lifecycleStage: "Lead",

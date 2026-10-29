@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Pencil, Plus, SlidersHorizontal, Trash2, X } from "lucide-react";
+import { BarChart3, ChevronDown, Copy, Pencil, Plus, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, Popover, PopoverContent, PopoverTrigger, Tooltip } from "@/components/ui/overlays";
@@ -33,9 +33,11 @@ interface Props {
   onQuickChange: (property: string, c: FilterCondition | undefined) => void;
   onChipsChange: (chips: string[]) => void;
   onOpenAdvanced: () => void;
+  /** Statistics for what the list shows */
+  onOpenInsights?: () => void;
 }
 
-export function QuickFilterBar({ defs, groups, users, chips, quick, advancedCount, onQuickChange, onChipsChange, onOpenAdvanced }: Props) {
+export function QuickFilterBar({ defs, groups, users, chips, quick, advancedCount, onQuickChange, onChipsChange, onOpenAdvanced, onOpenInsights }: Props) {
   const [editingChips, setEditingChips] = useState(false);
   const [adding, setAdding] = useState(false);
   const defMap = new Map(defs.map((d) => [d.name, d]));
@@ -95,6 +97,13 @@ export function QuickFilterBar({ defs, groups, users, chips, quick, advancedCoun
       <Button variant="link" size="sm" className="ml-1 gap-1 px-1" onClick={onOpenAdvanced}>
         <SlidersHorizontal className="size-3.5" /> Advanced filters{advancedCount ? ` (${advancedCount})` : ""}
       </Button>
+      {onOpenInsights && (
+        <Tooltip content="Numbers and breakdowns for the records this view shows">
+          <Button variant="link" size="sm" className="ml-auto gap-1 px-1" onClick={onOpenInsights}>
+            <BarChart3 className="size-3.5" /> Insights
+          </Button>
+        </Tooltip>
+      )}
     </div>
   );
 }
@@ -242,12 +251,38 @@ export function AdvancedFiltersPanel({
               <div key={gi}>
                 {gi > 0 && <div className="mb-3 text-center text-[11px] font-semibold uppercase text-ink-subtle">or</div>}
                 <div className="rounded-[4px] border border-line bg-surface-muted p-3">
-                  <div className="mb-2 flex items-center justify-between text-[12px] font-semibold text-ink-muted">
+                  <div className="mb-2 flex items-center gap-1 text-[12px] font-semibold text-ink-muted">
                     <span>Group {gi + 1}</span>
+                    {!isNew && g.conditions.length > 1 && (
+                      <Tooltip content="Match all conditions (AND) or any of them (OR)">
+                        <select
+                          value={g.op}
+                          onChange={(e) => onChange(value.map((x, i) => (i === gi ? { ...x, op: e.target.value as "AND" | "OR" } : x)))}
+                          className="ml-1 h-6 rounded-[3px] border border-line-strong bg-surface px-1 text-[12px] font-medium text-ink"
+                          aria-label={`Group ${gi + 1} logic`}
+                        >
+                          <option value="AND">match all (AND)</option>
+                          <option value="OR">match any (OR)</option>
+                        </select>
+                      </Tooltip>
+                    )}
                     {!isNew && (
-                      <button onClick={() => onChange(value.filter((_, i) => i !== gi))} aria-label={`Delete group ${gi + 1}`} className="rounded p-1 hover:bg-surface-hover">
-                        <Trash2 className="size-3.5" />
-                      </button>
+                      <span className="ml-auto flex items-center">
+                        <Tooltip content="Duplicate group">
+                          <button
+                            onClick={() => onChange([...value.slice(0, gi + 1), { op: g.op, conditions: g.conditions.map((c) => ({ ...c })) }, ...value.slice(gi + 1)])}
+                            aria-label={`Duplicate group ${gi + 1}`}
+                            className="rounded p-1 hover:bg-surface-hover"
+                          >
+                            <Copy className="size-3.5" />
+                          </button>
+                        </Tooltip>
+                        <Tooltip content="Delete group">
+                          <button onClick={() => onChange(value.filter((_, i) => i !== gi))} aria-label={`Delete group ${gi + 1}`} className="rounded p-1 hover:bg-surface-hover">
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </Tooltip>
+                      </span>
                     )}
                   </div>
                   {g.conditions.map((c, ci) => {
@@ -255,7 +290,7 @@ export function AdvancedFiltersPanel({
                     if (!def) return null;
                     return (
                       <div key={ci}>
-                        {ci > 0 && <div className="py-1 text-[11px] font-semibold uppercase text-ink-subtle">and</div>}
+                        {ci > 0 && <div className="py-1 text-[11px] font-semibold uppercase text-ink-subtle">{g.op === "OR" ? "or" : "and"}</div>}
                         <div className="flex items-start gap-2 rounded-[3px] border border-line bg-surface px-3 py-2 text-[13px]">
                           <button className="min-w-0 flex-1 text-left" onClick={() => setEditing({ group: gi, index: ci, condition: c })}>
                             <span className="font-medium">
@@ -273,7 +308,7 @@ export function AdvancedFiltersPanel({
                   })}
                   <div className="mt-2 flex flex-wrap gap-x-1">
                     <Button size="sm" variant="ghost" className="text-link" onClick={() => setAdding({ group: gi, scope: "self" })}>
-                      <Plus className="size-3.5" /> {g.conditions.length ? "AND" : "Add filter"}
+                      <Plus className="size-3.5" /> {g.conditions.length ? (g.op === "OR" ? "OR" : "AND") : "Add filter"}
                     </Button>
                     <Button size="sm" variant="ghost" className="text-link" onClick={() => setAdding({ group: gi, scope: "assoc" })}>
                       <Plus className="size-3.5" /> {assocLabel} property

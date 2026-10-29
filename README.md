@@ -41,6 +41,19 @@ wipe a non-local database that already has records).
 - **Segments** — active segments store `FilterGroup[]` and are evaluated live; static segments are `SegmentMember` rows
   (typed `contactId`/`companyId` links make membership filterable). Create them from the Segments page or from any list
   view ("Create segment from this view"), add records from the bulk bar, convert active → static, and export as CSV.
+  Each segment has a description, exclusions (members of up to 10 other segments and hand-picked records, applied to
+  active and static segments alike), a headline row (size, % of database, 7-day change from daily `SegmentSnapshot`
+  readings, created on, type), "Test a record" (which groups/conditions a record meets and which exclusion removes it)
+  and an **Insights** tab. The Segments page's **Analyze** tab compares 2–4 segments: size, overlap matrix, records only
+  in each, key numbers and make-up by any property (`src/lib/crm/insight-actions.ts`).
+- **Insights** (`src/lib/crm/insights.ts`) — headline numbers (callable, with targets/phones, called, never called,
+  called in 30 days, reached, CRT attempts, connect rate, meetings, in a campaign) and breakdowns by journey stage,
+  industry, country, state, time zone, employee band, source, call status, gatekeeper, signals, technologies, owner,
+  caller… for a segment or for whatever a contacts/companies list shows (the "Insights" link in its filter bar). Every
+  number and bar narrows the list to it.
+- **Filters** — besides the per-type operators: a pasted list of exact values for text fields ("is any of" / "is none
+  of", e.g. 200 domains), "ends with", "is at least / at most" for numbers, "has all of" for multi-selects, AND or OR
+  inside a group, and duplicate group.
 - **Record pages** render the stored `RecordLayout` (a team's layout when one exists, otherwise the default): header card,
   quick-action composers (note, email, call, task, meeting), Key information (personal property choice), property group
   cards, Overview/Activities tabs, and association cards (companies/contacts with labels and primary, phone numbers,
@@ -95,15 +108,18 @@ wipe a non-local database that already has records).
   match by domain then name. Modes: create + update, create only, update only; empty cells never erase data. Options:
   default owner, lead source and batch, add unknown dropdown values, put the batch in a new static segment. Every run
   is an `ImportJob`; failed rows can be downloaded with their errors. Templates: `/api/import/template`.
-- **Dynamics CRM leads** (`src/lib/crm/dynamics-parser.ts`, shared by the review screen and the server) — contact
-  imports can fill the lead's company from the same row (`Company › …` columns, empty fields only). The Description
-  column's `Targets>>` lines become contacts (name, title, email, phone, LinkedIn), `Numbers>>` lines become phone
-  numbers (type, IVR path such as "DBND 9, Sales 1, OPT 0", status, the person they belong to), and Caller Notes
-  entries (`10/23/2026: 01:56 PM: CRT: (325-223-9500 OPT) VM.`) become calls with their time (Asia/Dhaka or the
-  company's zone), number, path, outcome and target; other dated entries become notes and anything unreadable is kept
-  as one note. Both columns are detected from their content. The review step shows every parsed item with a checkbox;
-  unticked items are skipped. Re-imports don't duplicate calls or notes; CRT counts, call status and the lead journey
-  are recalculated (never lowered). `npx tsx scripts/check-dynamics-parser.ts` exercises the parsers.
+- **Dynamics CRM leads** (`src/lib/crm/dynamics-parser.ts`, shared by the review screen and the server) — a
+  "Lead Advanced Find View" export (recognised by its `(Do Not Modify) Lead` column) imported as companies maps itself
+  (`DYNAMICS_LEAD_COLUMNS`): one company per row, matched on re-import by its Dynamics lead ID, with the row's person
+  as its *lead person* (`Lead person › …` columns). The Description's `Targets>>` lines become contacts linked to the
+  company (title, every email and number, `*208` extension on the main line with its `DBND-627` code, "No longer",
+  "DNC till…" and other remarks), `Numbers>>` lines become company phone numbers (type, IVR path, status, notes), the
+  header lines fill services/apps, career page, LinkedIn and tags, and Caller Notes `CRT:` / `T2T:` entries become calls
+  with their time (Asia/Dhaka or the company's zone), number, path, outcome and the person spoken to. Contact imports
+  can still fill the contact's company from the row (`Company › …`). Owners and researchers who aren't users yet are
+  kept in a note. The review step shows every parsed item with a checkbox. Re-imports don't duplicate contacts, calls or
+  notes; CRT counts, call status and the lead journey are recalculated (never lowered). How-to and column mapping:
+  [docs/IMPORT-DYNAMICS.md](docs/IMPORT-DYNAMICS.md). `npx tsx scripts/check-dynamics-parser.ts` exercises the parsers.
 - **Settings** (`/settings`) — General (workspace name, AI toggle), Users & teams (roles, add users ahead of their first
   sign-in, deactivate — deactivated users can't sign in — teams and managers), Properties (rename, describe, regroup,
   edit dropdown options with colors and order; options are archived, never deleted, and keep their stored value when

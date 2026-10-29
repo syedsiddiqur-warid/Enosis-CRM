@@ -2,6 +2,7 @@
 // static segments are hand-picked member rows.
 import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { recordSegmentSize } from "./insights";
 import { segmentMembershipWhere, type QueryContext, type Where } from "./query";
 import type { CrmObject, SegmentSummary } from "./types";
 
@@ -34,18 +35,27 @@ export async function listSegments(userId: string, ctx: QueryContext) {
     include: { owner: { select: { name: true, email: true } } },
     orderBy: { updatedAt: "desc" },
   });
+  const [contacts, companies] = await Promise.all([db.contact.count({ where: { deletedAt: null } }), db.company.count({ where: { deletedAt: null } })]);
   return Promise.all(
-    rows.map(async (s) => ({
-      id: s.id,
-      name: s.name,
-      objectType: s.objectType as CrmObject,
-      type: s.type,
-      visibility: s.visibility,
-      ownerName: s.owner?.name ?? s.owner?.email ?? null,
-      isOwn: s.ownerId === userId,
-      updatedAt: s.updatedAt.toISOString(),
-      size: await countRecords(s.objectType as CrmObject, segmentRecordsWhere(s.objectType as CrmObject, s.id, ctx)),
-    })),
+    rows.map(async (s) => {
+      const object = s.objectType as CrmObject;
+      const size = await countRecords(object, segmentRecordsWhere(object, s.id, ctx));
+      return {
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        objectType: object,
+        type: s.type,
+        visibility: s.visibility,
+        ownerName: s.owner?.name ?? s.owner?.email ?? null,
+        isOwn: s.ownerId === userId,
+        createdAt: s.createdAt.toISOString(),
+        updatedAt: s.updatedAt.toISOString(),
+        size,
+        database: object === "CONTACT" ? contacts : companies,
+        change7d: await recordSegmentSize(s.id, size),
+      };
+    }),
   );
 }
 
