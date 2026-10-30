@@ -124,6 +124,8 @@ model User {
   researching     Company[]         @relation("CompanyResearcher")
   ownedCampaigns  Campaign[]        @relation("CampaignOwner")
   campaignWork    CampaignCompany[] @relation("CampaignAssignee")
+  researchAsked   ResearchRequest[] @relation("ResearchRequester")
+  researchDone    ResearchRequest[] @relation("ResearchRequestResearcher")
 }
 
 model Role {
@@ -225,6 +227,8 @@ model Company {
   createdById     String?
 
   contacts      ContactCompany[]
+  researchRequests ResearchRequest[]
+  campaignTargets CampaignContact[]
   phoneNumbers  PhoneNumber[]
   deals         DealCompany[]
   activities    ActivityCompany[]
@@ -294,6 +298,8 @@ model Contact {
   activities    ActivityContact[]
   callsTargeted Activity[]        @relation("CallTargetContact")
   segments      SegmentMember[]
+  researchRequests ResearchRequest[]
+  campaignTargets CampaignContact[]
 
   @@index([email])
   @@index([lastName, firstName])
@@ -889,6 +895,8 @@ enum CampaignStatus {
 model Campaign {
   id          String         @id @default(cuid())
   name        String
+  // COMPANY: everyone at each company / CONTACT: only the chosen people (still worked company by company)
+  audience    String         @default("COMPANY")
   description String?
   type        String // Buying signal / ICP / Custom set / Re-engagement / Event
   status      CampaignStatus @default(DRAFT)
@@ -909,6 +917,8 @@ model Campaign {
 
   members    CampaignCompany[]
   activities Activity[]
+  researchRequests ResearchRequest[]
+  people     CampaignContact[]
 
   @@index([status])
 }
@@ -1048,4 +1058,61 @@ model WorkspaceSettings {
   defaultTimeZone String   @default("Asia/Dhaka")
   aiEnabled       Boolean  @default(false)
   updatedAt       DateTime @updatedAt
+}
+
+/// A caller asking the research team to look into a company (or one of its people) during calling;
+/// the researcher sends it back with a result, and the company comes back up in the caller's queue.
+model ResearchRequest {
+  id            String    @id @default(cuid())
+  companyId     String
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contactId     String?
+  contact       Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  campaignId    String?
+  campaign      Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  // Find decision maker / Find direct number / Find extension / Verify company info / Other
+  kind          String
+  note          String?
+  // Open / In progress / Sent back / Cancelled
+  status        String    @default("Open")
+  requestedById String?
+  requestedBy   User?     @relation("ResearchRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  researcherId  String?
+  researcher    User?     @relation("ResearchRequestResearcher", fields: [researcherId], references: [id], onDelete: SetNull)
+  result        String?
+  resolvedAt    DateTime?
+  // When the caller opened the result; null = not seen yet
+  seenAt        DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status])
+  @@index([companyId])
+  @@index([requestedById, status])
+}
+
+/// A person targeted by a Contact campaign. The campaign is still worked company by company (CampaignCompany);
+/// this row says which people at that company to call and tracks each one's outcome and attempts.
+model CampaignContact {
+  campaignId String
+  contactId  String
+  // The company they're called through (their primary company when added)
+  companyId  String
+  // Queued / In progress / Connected / Meeting booked / Not interested / Nurture / Disqualified / Completed
+  status     String    @default("Queued")
+  attempts   Int       @default(0)
+  connects   Int       @default(0)
+  lastResult String?
+  lastCallAt DateTime?
+  addedVia   String    @default("manual") // manual / segment
+  addedAt    DateTime  @default(now())
+  addedById  String?
+  removedAt  DateTime?
+  campaign   Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact    Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  company    Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@id([campaignId, contactId])
+  @@index([campaignId, companyId])
+  @@index([contactId])
 }

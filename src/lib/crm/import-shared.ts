@@ -28,6 +28,8 @@ export interface ImportOptions {
   segmentName: string | null;
   /** Caller Notes timestamps: typed in the workspace zone (Asia/Dhaka) or in the company's own zone */
   dynamicsTimeZone: "workspace" | "company";
+  /** Companies: research queue researchers. New companies (and matches without one) are spread evenly across them */
+  researcherIds?: string[];
 }
 
 export const DYN_DESCRIPTION = "dyn:description";

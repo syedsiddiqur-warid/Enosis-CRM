@@ -297,6 +297,9 @@ interface RunContext {
   exclude: Set<string>;
 }
 
+/** Round robin by spreadsheet row, so the split is even across chunks. */
+const researcherFor = (options: ImportOptions, row: number) => (options.researcherIds?.length ? options.researcherIds[row % options.researcherIds.length] : null);
+
 const isEmpty = (v: unknown) => v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length);
 
 async function findOrCreateCompany(p: Prepared, run: RunContext): Promise<string | null> {
@@ -343,7 +346,7 @@ async function findOrCreateCompany(p: Prepared, run: RunContext): Promise<string
   return c.id;
 }
 
-async function importRow(p: Prepared, run: RunContext): Promise<{ action: ImportRowResult["action"]; id?: string; message?: string }> {
+async function importRow(p: Prepared, run: RunContext, row: number): Promise<{ action: ImportRowResult["action"]; id?: string; message?: string }> {
   const { object, options } = run;
   // 1. Find the existing record
   let existing: { id: string; properties: Prisma.JsonValue; leadState?: string | null } | null = null;
@@ -418,6 +421,7 @@ async function importRow(p: Prepared, run: RunContext): Promise<{ action: Import
         leadStatus: "New",
         researchStatus: "Not started",
         ownerId: options.ownerId,
+        researcherId: researcherFor(options, row),
         source: options.source,
         batchNumber: options.batchNumber,
         ...(p.builtIn as Prisma.CompanyUncheckedCreateInput),
@@ -466,6 +470,8 @@ async function importRow(p: Prepared, run: RunContext): Promise<{ action: Import
   }
   // Research and viability already done in the old CRM move the journey on (forward only)
   if (object === "COMPANY") {
+    // Matched companies without a researcher get one too
+    if (existing && options.researcherIds?.length) await db.company.updateMany({ where: { id, researcherId: null }, data: { researcherId: researcherFor(options, row) } });
     const researched = !!(p.builtIn.researchedAt || p.custom.researchResult || p.custom.viable || p.custom.callable);
     const stage = p.custom.callable === "Yes" ? STAGE.callable : p.custom.viable === "Yes" ? STAGE.viable : researched ? STAGE.researched : null;
     if (stage) await advanceJourney(id, stage, run.userId, { source: "import", reason: run.source });
@@ -813,7 +819,7 @@ async function runRows(object: ImportObject, job: JobMapping, rows: ImportRow[],
     }
     try {
       run.exclude = new Set(item.exclude ?? []);
-      results.push({ row: item.row, ...(await importRow(item.p!, run)) });
+      results.push({ row: item.row, ...(await importRow(item.p!, run, item.row)) });
     } catch (e) {
       results.push({ row: item.row, action: "error", message: e instanceof Error ? e.message : "Couldn't import this row" });
     }
@@ -865,6 +871,10 @@ export async function startImport(setup: ImportSetup): Promise<Result<{ jobId: s
     const user = await requireUser();
     await canImport(user.id);
     checkSetup(setup);
+    if (setup.options.researcherIds?.length) {
+      const active = await db.user.findMany({ where: { id: { in: setup.options.researcherIds }, isActive: true }, select: { id: true } });
+      setup.options.researcherIds = setup.options.researcherIds.filter((id) => active.some((u) => u.id === id));
+    }
     let segmentId: string | null = null;
     const segName = setup.options.segmentName?.trim();
     if (segName) {

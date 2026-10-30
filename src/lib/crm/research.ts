@@ -19,3 +19,8 @@ export function researchColumn(c: { researchStatus: string | null; properties: u
   if (c.researchStatus === "In progress" || c.researchStatus === "Needs more info") return "researching";
   return "to_research";
 }
+
+/** What a caller can ask the research team for while calling. */
+export const RESEARCH_REQUEST_KINDS = ["Find decision maker", "Find direct number", "Find extension", "Verify company info", "Other"] as const;
+
+export const REQUEST_STATUS_COLORS: Record<string, string> = { Open: "#f5c26b", "In progress": "#00a4bd", "Sent back": "#00bda5", Cancelled: "#cbd6e2" };

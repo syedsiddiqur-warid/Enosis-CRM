@@ -1,6 +1,6 @@
 "use client";
 
-import { MoreHorizontal, Plus, Search } from "lucide-react";
+import { Building2, MoreHorizontal, Plus, Search, Users } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
@@ -122,9 +122,17 @@ export function CampaignsList({ data, segments, showArchived }: { data: Campaign
                   <td className="border-b border-line px-3">
                     <CampaignStatusPill status={r.status} />
                   </td>
-                  <td className="border-b border-line px-3 text-ink-muted">{r.type}</td>
+                  <td className="border-b border-line px-3 text-ink-muted">
+                    {r.type}
+                    {r.audience === "CONTACT" && (
+                      <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-[#eef0fb] px-1.5 text-[11px] text-[#4b58b0]">
+                        <Users className="size-3" /> Contacts
+                      </span>
+                    )}
+                  </td>
                   <td className="border-b border-line px-3 text-right tabular-nums">
                     {r.stats.members}
+                    {r.audience === "CONTACT" && <div className="text-[11px] text-ink-subtle">{r.stats.people} people</div>}
                     {r.goals.companies ? <span className="text-ink-subtle"> / {r.goals.companies}</span> : null}
                   </td>
                   <td className="w-[150px] border-b border-line px-3">
@@ -219,6 +227,7 @@ export function CreateCampaignDialog({
   types,
   segments,
   companyIds,
+  contactIds,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -226,6 +235,8 @@ export function CreateCampaignDialog({
   segments: SegmentSummary[];
   /** Create from a selection on the Companies list */
   companyIds?: string[];
+  /** Create from a selection on the Contacts list (a Contact campaign) */
+  contactIds?: string[];
 }) {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -235,9 +246,13 @@ export function CreateCampaignDialog({
   const [endDate, setEndDate] = useState("");
   const [from, setFrom] = useState<"criteria" | "segment" | "empty">("criteria");
   const [segmentId, setSegmentId] = useState("");
+  // Company campaign: everyone at each company. Contact campaign: only the chosen people.
+  const [audience, setAudience] = useState<"COMPANY" | "CONTACT">("COMPANY");
+  const picked = companyIds?.length ? companyIds.length : (contactIds?.length ?? 0);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const companySegments = segments.filter((s) => s.objectType === "COMPANY");
+  const contactSegments = segments.filter((s) => s.objectType === "CONTACT");
 
   return (
     <Dialog
@@ -248,12 +263,17 @@ export function CreateCampaignDialog({
           setName("");
           setDescription("");
           setError(null);
-          setType(companyIds?.length ? "Custom set" : (types[0]?.value ?? "Custom set"));
-          setFrom(companyIds?.length ? "empty" : "criteria");
+          setType(picked ? "Custom set" : (types[0]?.value ?? "Custom set"));
+          setAudience(contactIds?.length ? "CONTACT" : "COMPANY");
+          setFrom(picked ? "empty" : "criteria");
+          setSegmentId("");
         }
       }}
     >
-      <DialogContent title={companyIds?.length ? `Create campaign with ${companyIds.length} companies` : "Create campaign"} className="w-[560px]">
+      <DialogContent
+        title={companyIds?.length ? `Create campaign with ${companyIds.length} companies` : contactIds?.length ? `Create campaign with ${contactIds.length} people` : "Create campaign"}
+        className="w-[600px]"
+      >
         <form
           className="space-y-4 px-6 py-5"
           onSubmit={(e) => {
@@ -265,16 +285,51 @@ export function CreateCampaignDialog({
                 description,
                 startDate: startDate || null,
                 endDate: endDate || null,
+                audience,
                 segmentId: from === "segment" ? segmentId : null,
                 companyIds,
+                contactIds,
               });
               if (!res.ok) return setError(res.error);
               onOpenChange(false);
-              router.push(`/campaigns/${res.data!.id}${from === "criteria" ? "?tab=criteria" : ""}`);
+              router.push(`/campaigns/${res.data!.id}${from === "criteria" && audience === "COMPANY" ? "?tab=criteria" : ""}`);
             });
           }}
         >
           {error && <p className="rounded-[3px] bg-danger-soft px-3 py-2 text-[13px] text-danger">{error}</p>}
+          {!picked && (
+            <fieldset>
+              <legend className="mb-1.5 text-[12px] font-medium">What kind of campaign?</legend>
+              <div className="grid grid-cols-2 gap-2">
+                {(
+                  [
+                    ["COMPANY", Building2, "Company campaign", "Call companies. Callers can reach anyone who works there."],
+                    ["CONTACT", Users, "Contact campaign", "Call only the people you choose. Each company is still called once, for just those people."],
+                  ] as const
+                ).map(([v, Icon, label, help]) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => {
+                      setAudience(v);
+                      setSegmentId("");
+                      setFrom(v === "CONTACT" ? "segment" : "criteria");
+                    }}
+                    aria-pressed={audience === v}
+                    className={cn(
+                      "rounded-[4px] border p-3 text-left",
+                      audience === v ? "border-link bg-[#e5f5f8] ring-1 ring-link" : "border-line-strong hover:bg-surface-hover",
+                    )}
+                  >
+                    <span className="flex items-center gap-2 text-[13px] font-medium">
+                      <Icon className="size-4 text-link" /> {label}
+                    </span>
+                    <span className="mt-0.5 block text-[12px] text-ink-muted">{help}</span>
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+          )}
           <div>
             <Label htmlFor="camp-name">Campaign name</Label>
             <Input id="camp-name" value={name} onChange={(e) => setName(e.target.value)} autoFocus maxLength={120} placeholder="e.g. Q1 – Series A SaaS hiring .NET devs" />
@@ -310,15 +365,19 @@ export function CreateCampaignDialog({
               placeholder="Who is in it and why now"
             />
           </div>
-          {!companyIds?.length && (
+          {!picked && (
             <fieldset>
-              <legend className="mb-1 text-[12px] font-medium">Build the company set from</legend>
-              {(
-                [
-                  ["criteria", "Criteria", "Customer profile, buying signals, journey stage, past calls and campaign outcomes. You set them next."],
-                  ["segment", "A company segment", "Start with every company in an existing segment."],
-                  ["empty", "Nothing yet", "Add companies by hand or from the Companies list."],
-                ] as const
+              <legend className="mb-1 text-[12px] font-medium">{audience === "CONTACT" ? "Choose the people from" : "Build the company set from"}</legend>
+              {(audience === "CONTACT"
+                ? ([
+                    ["segment", "A contact segment", "Exactly the people in the segment. People without a company are skipped (you're told how many)."],
+                    ["empty", "Nothing yet", "Add people later from the Contacts list or the campaign page."],
+                  ] as const)
+                : ([
+                    ["criteria", "Criteria", "Customer profile, buying signals, journey stage, past calls and campaign outcomes. You set them next."],
+                    ["segment", "A segment", "Start with every company in a company segment, or the companies of everyone in a contact segment."],
+                    ["empty", "Nothing yet", "Add companies by hand or from the Companies list."],
+                  ] as const)
               ).map(([v, l, help]) => (
                 <label key={v} className="flex cursor-pointer gap-2 py-1">
                   <input type="radio" className="mt-0.5 accent-[var(--link)]" checked={from === v} onChange={() => setFrom(v)} />
@@ -329,13 +388,26 @@ export function CreateCampaignDialog({
                 </label>
               ))}
               {from === "segment" && (
-                <Select className="mt-1" value={segmentId} onChange={(e) => setSegmentId(e.target.value)} aria-label="Company segment">
-                  <option value="">Choose a company segment</option>
-                  {companySegments.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
+                <Select className="mt-1" value={segmentId} onChange={(e) => setSegmentId(e.target.value)} aria-label="Segment">
+                  <option value="">Choose a segment</option>
+                  {audience === "COMPANY" && companySegments.length > 0 && (
+                    <optgroup label="Company segments">
+                      {companySegments.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {contactSegments.length > 0 && (
+                    <optgroup label={audience === "CONTACT" ? "Contact segments" : "Contact segments (adds their companies)"}>
+                      {contactSegments.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </Select>
               )}
             </fieldset>
@@ -345,7 +417,7 @@ export function CreateCampaignDialog({
               Cancel
             </Button>
             <Button type="submit" variant="primary" disabled={pending || !name.trim() || (from === "segment" && !segmentId)}>
-              {from === "criteria" ? "Next: set criteria" : "Create campaign"}
+              {from === "criteria" && audience === "COMPANY" ? "Next: set criteria" : "Create campaign"}
             </Button>
           </div>
         </form>

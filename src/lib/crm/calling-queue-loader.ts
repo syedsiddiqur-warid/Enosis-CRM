@@ -2,7 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { fullName } from "@/lib/utils";
 import { OPEN_STATUSES, compareQueue, inBusinessHours, queueBucket } from "./calling-queue";
-import { parseSettings } from "./campaigns";
+import { parseSettings, personDone } from "./campaigns";
 import { getPropDefs } from "./properties";
 import type { PropOption, UserLite } from "./types";
 
@@ -26,6 +26,13 @@ export async function loadQueueIndex(userId: string) {
     where: { campaignId: { in: campaigns.map((c) => c.id) }, removedAt: null, status: { in: OPEN_STATUSES }, company: { deletedAt: null } },
     select: { campaignId: true, assignedToId: true, attempts: true, nextActionAt: true, lastCallAt: true, addedAt: true, company: { select: { timeZone: true } } },
   });
+  // Research the team sent back to me that I haven't opened yet
+  const researchBack = await db.researchRequest.findMany({
+    where: { requestedById: userId, status: "Sent back", seenAt: null },
+    include: { company: { select: { name: true } }, researcher: { select: { name: true } } },
+    orderBy: { resolvedAt: "desc" },
+    take: 20,
+  });
   const now = Date.now();
   return {
     campaigns: campaigns.map((c) => {
@@ -47,6 +54,16 @@ export async function loadQueueIndex(userId: string) {
         inHoursNow: all.filter((m) => inBusinessHours(m.company.timeZone) !== false).length,
       };
     }),
+    researchBack: researchBack.map((r) => ({
+      id: r.id,
+      companyId: r.companyId,
+      company: r.company.name,
+      campaignId: r.campaignId,
+      kind: r.kind,
+      result: r.result,
+      researcher: r.researcher?.name ?? null,
+      resolvedAt: iso(r.resolvedAt),
+    })),
   };
 }
 
@@ -87,6 +104,11 @@ export async function loadQueue(campaignId: string, userId: string, sp: QueueSea
       company: { select: { name: true, domain: true, timeZone: true, leadState: true } },
     },
   });
+  // Research the callers asked for: still open, or sent back and not read yet
+  const requests = await db.researchRequest.findMany({
+    where: { companyId: { in: rows.map((m) => m.companyId) }, OR: [{ status: { in: ["Open", "In progress"] } }, { status: "Sent back", seenAt: null }] },
+    select: { companyId: true, status: true },
+  });
   const now = Date.now();
   const queue = rows
     .map((m) => ({
@@ -104,42 +126,54 @@ export async function loadQueue(campaignId: string, userId: string, sp: QueueSea
       addedAt: m.addedAt.toISOString(),
       assignedTo: m.assignedTo,
       inHours: inBusinessHours(m.company.timeZone),
+      researchOpen: requests.some((r) => r.companyId === m.companyId && r.status !== "Sent back"),
+      researchBack: requests.some((r) => r.companyId === m.companyId && r.status === "Sent back"),
     }))
     .filter((m) => !hoursOnly || m.inHours !== false)
     .sort((a, b) => compareQueue(a, b, now))
     .map((m) => ({ ...m, bucket: queueBucket(m, now) }));
 
   const currentId = queue.some((q) => q.companyId === sp.id) ? sp.id! : queue[0]?.companyId;
-  const [users, current, callResults, callPaths, gatekeeperTypes, followUpRules, companyDefs] = await Promise.all([
+  const [users, current, callResults, callPaths, gatekeeperTypes, followUpRules, companyDefs, phoneTypes, phoneStatuses] = await Promise.all([
     db.user.findMany({ where: { isActive: true }, select: { id: true, name: true, email: true }, orderBy: { name: "asc" } }),
-    currentId ? loadCompany(currentId, campaignId) : null,
+    currentId ? loadCompany(currentId, campaignId, parseSettings(campaign.settings).maxAttempts) : null,
     optionList("callResult"),
     optionList("callPath"),
     optionList("gatekeeperType"),
     db.followUpRule.findMany({ where: { isActive: true }, select: { callResult: true, taskTitle: true, taskType: true, dueInDays: true } }),
     getPropDefs("COMPANY"),
+    optionList("phoneType"),
+    optionList("phoneStatus"),
   ]);
 
   return {
-    campaign: { id: campaign.id, name: campaign.name, type: campaign.type, pitch: campaign.pitch, status: campaign.status, maxAttempts: parseSettings(campaign.settings).maxAttempts },
+    campaign: {
+      id: campaign.id,
+      name: campaign.name,
+      type: campaign.type,
+      audience: campaign.audience as "COMPANY" | "CONTACT",
+      pitch: campaign.pitch,
+      status: campaign.status,
+      maxAttempts: parseSettings(campaign.settings).maxAttempts,
+    },
     caller,
     hoursOnly,
     queue,
     current,
     users: users as UserLite[],
     currentUserId: userId,
-    options: { callResult: callResults, callPath: callPaths, gatekeeperType: gatekeeperTypes },
+    options: { callResult: callResults, callPath: callPaths, gatekeeperType: gatekeeperTypes, phoneType: phoneTypes, phoneStatus: phoneStatuses },
     journeyOptions: companyDefs.find((d) => d.name === "leadState")?.options ?? [],
     followUpRules,
   };
 }
 
 /** Everything a caller needs on screen for one company. */
-async function loadCompany(companyId: string, campaignId: string) {
-  const [company, links, phones, calls, tasks, signals, member] = await Promise.all([
+async function loadCompany(companyId: string, campaignId: string, maxAttempts: number | null) {
+  const [company, links, phones, calls, tasks, signals, member, research, notes, targets] = await Promise.all([
     db.company.findUniqueOrThrow({
       where: { id: companyId },
-      select: { id: true, name: true, domain: true, phone: true, timeZone: true, city: true, state: true, country: true, industry: true, employees: true, description: true, pitchNotes: true, leadState: true, callStatus: true, crtCount: true },
+      select: { id: true, name: true, domain: true, phone: true, linkedinUrl: true, timeZone: true, city: true, state: true, country: true, industry: true, employees: true, description: true, pitchNotes: true, leadState: true, callStatus: true, crtCount: true },
     }),
     db.contactCompany.findMany({
       where: { companyId, contact: { deletedAt: null } },
@@ -169,6 +203,25 @@ async function loadCompany(companyId: string, campaignId: string) {
     }),
     db.buyingSignal.findMany({ where: { companyId }, orderBy: { detectedAt: "desc" }, take: 5 }),
     db.campaignCompany.findUnique({ where: { campaignId_companyId: { campaignId, companyId } } }),
+    db.researchRequest.findMany({
+      where: { companyId, status: { not: "Cancelled" } },
+      include: { requestedBy: { select: { name: true } }, researcher: { select: { name: true } }, contact: { select: { firstName: true, lastName: true, email: true } } },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+    }),
+    // Notes written on the company or its people (not part of a call)
+    db.activity.findMany({
+      where: {
+        type: "NOTE",
+        deletedAt: null,
+        OR: [{ companies: { some: { companyId } } }, { contacts: { some: { contact: { companies: { some: { companyId } } } } } }],
+      },
+      include: { owner: { select: { name: true } }, contacts: { select: { contact: { select: { firstName: true, lastName: true, email: true } } }, take: 1 } },
+      orderBy: { occurredAt: "desc" },
+      take: 20,
+    }),
+    // Contact campaigns: the people to call here
+    db.campaignContact.findMany({ where: { campaignId, companyId, removedAt: null }, select: { contactId: true, status: true, attempts: true, lastResult: true } }),
   ]);
   const contactName = new Map(links.map((l) => [l.contact.id, fullName(l.contact)]));
 
@@ -177,6 +230,8 @@ async function loadCompany(companyId: string, campaignId: string) {
     contacts: links.map((l) => ({
       id: l.contact.id,
       name: fullName(l.contact),
+      firstName: l.contact.firstName,
+      lastName: l.contact.lastName,
       jobTitle: l.contact.jobTitle,
       email: l.contact.email,
       phone: l.contact.phone,
@@ -188,6 +243,11 @@ async function loadCompany(companyId: string, campaignId: string) {
       doNotCall: l.contact.doNotCall,
       labels: l.labels,
       isPrimary: l.isPrimary,
+      // Contact campaigns: whether this person is on the list, and how far they got
+      target: (() => {
+        const t = targets.find((x) => x.contactId === l.contact.id);
+        return t ? { status: t.status, attempts: t.attempts, lastResult: t.lastResult, done: personDone(t, maxAttempts) } : null;
+      })(),
     })),
     phones: phones.map((p) => ({
       id: p.id,
@@ -211,12 +271,29 @@ async function loadCompany(companyId: string, campaignId: string) {
       durationSec: a.durationSec,
       body: a.body,
       contact: a.targetContact ? fullName(a.targetContact) : null,
+      contactId: a.targetContactId,
       by: a.owner?.name ?? null,
       campaign: a.campaign,
       thisCampaign: a.campaignId === campaignId,
     })),
     tasks: tasks.map((t) => ({ ...t, dueAt: iso(t.dueAt) })),
     signals: signals.map((s) => ({ id: s.id, type: s.type, title: s.title, strength: s.strength, detectedAt: s.detectedAt.toISOString() })),
+    notes: notes.map((n) => ({ id: n.id, at: n.occurredAt.toISOString(), body: n.body, by: n.owner?.name ?? null, contact: n.contacts[0] ? fullName(n.contacts[0].contact) : null })),
+    // Targeted people no longer linked to this company (moved on)
+    movedTargets: targets.filter((t) => !links.some((l) => l.contact.id === t.contactId)).length,
+    research: research.map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      note: r.note,
+      status: r.status,
+      result: r.result,
+      contact: r.contact ? fullName(r.contact) : null,
+      requestedBy: r.requestedBy?.name ?? null,
+      researcher: r.researcher?.name ?? null,
+      createdAt: r.createdAt.toISOString(),
+      resolvedAt: iso(r.resolvedAt),
+      seen: !!r.seenAt,
+    })),
     member: member ? { status: member.status, attempts: member.attempts, connects: member.connects, nextActionAt: iso(member.nextActionAt), notes: member.notes } : null,
   };
 }

@@ -1,7 +1,32 @@
+import { AuthError } from "next-auth";
 import { redirect } from "next/navigation";
 import { auth, devLoginEnabled, enabledProviders, signIn } from "@/auth";
+import { db } from "@/lib/db";
 
 export const metadata = { title: "Sign in" };
+
+/** Sign in, but come back to this page with a readable reason instead of an error screen. */
+async function signInOrExplain(provider: string, options: Record<string, unknown>, callbackUrl?: string) {
+  const back = (error: string) => `/login?error=${error}${callbackUrl ? `&callbackUrl=${encodeURIComponent(callbackUrl)}` : ""}`;
+  // Sign-in looks the user up in the database; when it's down Auth.js only says "AccessDenied"
+  try {
+    await db.$queryRaw`SELECT 1`;
+  } catch {
+    redirect(back("Database"));
+  }
+  try {
+    await signIn(provider, options);
+  } catch (e) {
+    if (e instanceof AuthError) redirect(back(e.type));
+    throw e;
+  }
+}
+
+const ERRORS: Record<string, (domain: string) => string> = {
+  Database: () => "The database isn't running. Start it with npm run db:up in the CRM folder, then sign in again.",
+  AccessDenied: (domain) => `This account can't sign in. Use your @${domain} address; if it still fails, ask an admin whether your account is active.`,
+  CredentialsSignin: (domain) => `Only @${domain} accounts can sign in.`,
+};
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string; callbackUrl?: string }> }) {
   const session = await auth();
@@ -21,7 +46,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <p className="mb-6 text-[13px] text-ink-muted">Use your @{domain} account.</p>
         {error && (
           <div className="mb-4 rounded-[3px] border border-danger/30 bg-danger-soft px-3 py-2 text-[13px] text-danger">
-            {error === "AccessDenied" || error === "CredentialsSignin" ? `Only @${domain} accounts can sign in.` : "Sign-in failed. Try again."}
+            {ERRORS[error]?.(domain) ?? "Sign-in failed. Try again."}
           </div>
         )}
         <div className="space-y-2">
@@ -30,7 +55,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
               key={p.id}
               action={async () => {
                 "use server";
-                await signIn(p.id, { redirectTo: callbackUrl ?? "/" });
+                await signInOrExplain(p.id, { redirectTo: callbackUrl ?? "/" }, callbackUrl);
               }}
             >
               <button className="h-9 w-full rounded-[3px] border border-line-strong text-[13px] font-medium hover:bg-surface-hover">Continue with {p.name}</button>
@@ -42,7 +67,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
             className="mt-4 border-t border-line pt-4"
             action={async (fd: FormData) => {
               "use server";
-              await signIn("dev", { email: fd.get("email"), redirectTo: callbackUrl ?? "/" });
+              await signInOrExplain("dev", { email: fd.get("email"), redirectTo: callbackUrl ?? "/" }, callbackUrl);
             }}
           >
             <label className="mb-1 block text-[12px] font-medium" htmlFor="email">

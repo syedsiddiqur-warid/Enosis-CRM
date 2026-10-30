@@ -1,8 +1,8 @@
 "use client";
 
-import { Copy, MoreHorizontal, Phone, Plus, Search } from "lucide-react";
+import { Copy, Handshake, Mail, MoreHorizontal, Phone, Plus, Search, Users } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { CompanyLogo, LocalTime, Pill, copyText } from "@/components/index/values";
 import { Button, Input } from "@/components/ui/button";
 import { Checkbox, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, Popover, PopoverAnchor, PopoverContent, PopoverTrigger, Tooltip } from "@/components/ui/overlays";
@@ -10,12 +10,13 @@ import { searchCompanies } from "@/lib/crm/actions";
 import { formatDate, friendlyDateTime } from "@/lib/crm/dates";
 import { associate, dissociate, searchContacts, setAssociationLabels, setPrimaryCompany } from "@/lib/crm/record-actions";
 import type { LayoutConfig } from "@/lib/crm/record-types";
-import { cn, formatNumber, formatPhone, phoneHref } from "@/lib/utils";
+import { cn, formatNumber, formatPhone, phoneHref, splitPhone } from "@/lib/utils";
 import { deletePhoneNumber, savePhoneNumber, setPhoneStatus, type PhoneInput } from "@/lib/crm/phone-actions";
+import { saveCompanyEmails } from "@/lib/crm/email-actions";
 import { CampaignsCard, LeadJourneyCard, SignalsCard } from "./company-cards";
 import { PhoneDialog } from "./phone-dialog";
 import { useRecord } from "./record-context";
-import { CardGear, RecordCard } from "./record-ui";
+import { CARD_ACCENTS, CardGear, RecordCard } from "./record-ui";
 
 type CardConfig = LayoutConfig["right"]["cards"][number];
 
@@ -23,13 +24,27 @@ const PHONE_STATUS_COLORS: Record<string, string> = { Valid: "#00bda5", "Temp Bu
 
 export function RightColumn() {
   const { data } = useRecord();
+  // On a company, who to call and how to reach them come first: Contacts, then Company numbers and emails
+  const cards =
+    data.object === "COMPANY"
+      ? [...data.layout.config.right.cards].sort((a, b) => companyCardRank(a) - companyCardRank(b))
+      : data.layout.config.right.cards;
   return (
-    <aside className="thin-scroll min-h-0 overflow-y-auto rounded-[6px] border border-line bg-surface">
-      {data.layout.config.right.cards.map((card) => {
+    <aside className="thin-scroll min-h-0 space-y-3 overflow-y-auto pb-1">
+      {cards.map((card) => {
         if (card.kind === "association" && card.object === "COMPANY" && data.object === "CONTACT") return <CompaniesCard key={card.id} card={card} />;
         if (card.kind === "association" && card.object === "CONTACT" && data.object === "COMPANY") return <ContactsCard key={card.id} card={card} />;
         if (card.kind === "association" && card.object === "DEAL") return <DealsCard key={card.id} card={card} />;
-        if (card.kind === "phone_numbers") return <PhonesCard key={card.id} card={card} />;
+        // Company emails sit right under Company numbers
+        if (card.kind === "phone_numbers")
+          return data.object === "COMPANY" ? (
+            <Fragment key={card.id}>
+              <PhonesCard card={card} />
+              <CompanyEmailsCard />
+            </Fragment>
+          ) : (
+            <PhonesCard key={card.id} card={card} />
+          );
         if (card.kind === "case_studies") return <ProjectsCard key={card.id} card={card} />;
         if (card.kind === "segments") return <SegmentsCard key={card.id} card={card} />;
         if (card.kind === "lead_journey") return <LeadJourneyCard key={card.id} card={card} />;
@@ -40,6 +55,8 @@ export function RightColumn() {
     </aside>
   );
 }
+
+const companyCardRank = (card: CardConfig) => (card.kind === "association" && card.object === "CONTACT" ? 0 : card.kind === "phone_numbers" ? 1 : 2);
 
 /** "View all" toggle for cards over their configured limit. */
 function useLimit<T>(items: T[], limit = 5) {
@@ -238,8 +255,63 @@ function CompaniesCard({ card }: { card: CardConfig }) {
   );
 }
 
+type RecordContact = ReturnType<typeof useRecord>["data"]["contacts"][number];
+
+/** A contact's own numbers on their card: their phone lines first, then their Phone / Mobile fields if not already listed. */
+function ContactNumbers({ contact: c }: { contact: RecordContact }) {
+  const { data, openComposer } = useRecord();
+  const digits = (n: string) => splitPhone(n).number.replace(/\D/g, "");
+  const lines = data.phones.filter((p) => p.contactId === c.id);
+  const seen = new Set(lines.map((p) => p.number.replace(/\D/g, "")));
+  const fields = [c.phone, c.mobile].filter((n): n is string => !!n && !seen.has(digits(n)) && (seen.add(digits(n)), true));
+  const target = { id: c.id, name: c.name };
+  if (!lines.length && !fields.length)
+    return (
+      <div>
+        <span className="text-ink-muted">Phone number:</span> <span className="text-ink-subtle">--</span>
+      </div>
+    );
+  return (
+    <div className="space-y-1">
+      {lines.map((p) => (
+        <div key={p.id} className="group/num">
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <span className="text-ink-muted">{p.type}:</span>
+            <a href={phoneHref(p.extension ? `${p.number} ext. ${p.extension}` : p.number)} className="font-medium tabular-nums text-link hover:underline">
+              {formatPhone(p.number)}
+              {p.extension ? ` ext. ${p.extension}` : ""}
+            </a>
+            <Pill label={p.status} color={PHONE_STATUS_COLORS[p.status]} />
+            <button
+              className="text-[12px] text-link opacity-0 hover:underline group-hover/num:opacity-100 focus:opacity-100"
+              onClick={() => openComposer("call", undefined, { phoneNumberId: p.id, targetContact: target })}
+            >
+              Log call
+            </button>
+          </div>
+          {(p.ivrPath || p.notes) && (
+            <div className="text-[12px] text-ink-muted">
+              {p.ivrPath ? `IVR: ${p.ivrPath}` : ""}
+              {p.ivrPath && p.notes ? " · " : ""}
+              {p.notes}
+            </div>
+          )}
+        </div>
+      ))}
+      {fields.map((n) => (
+        <div key={n} className="flex items-center gap-1.5">
+          <span className="text-ink-muted">{n === c.mobile ? "Mobile:" : "Phone:"}</span>
+          <a href={phoneHref(n)} className="font-medium tabular-nums text-link hover:underline">
+            {formatPhone(n)}
+          </a>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ContactsCard({ card }: { card: CardConfig }) {
-  const { data } = useRecord();
+  const { data, toast } = useRecord();
   const run = useAssociationActions();
   const [labelling, setLabelling] = useState<string | null>(null);
   const { shown, more, showAll } = useLimit(data.contacts, card.limit);
@@ -247,6 +319,8 @@ function ContactsCard({ card }: { card: CardConfig }) {
     <RecordCard
       id={`right:${card.id}`}
       title={card.title ?? "Contacts"}
+      icon={Users}
+      accent={CARD_ACCENTS.contacts}
       count={data.contacts.length}
       actions={
         <>
@@ -255,29 +329,51 @@ function ContactsCard({ card }: { card: CardConfig }) {
         </>
       }
     >
-      <ul className="divide-y divide-line">
+      <ul className="space-y-2.5">
         {shown.map((c) => (
-          <li key={c.id} className="flex items-start gap-2 py-2 text-[13px] first:pt-0">
-            <div className="min-w-0 flex-1">
+          <li key={c.id} className="flex items-start gap-2 rounded-[6px] border border-line p-3 text-[13px]">
+            <div className="min-w-0 flex-1 space-y-1">
               <div className="flex flex-wrap items-center gap-1.5">
-                <Link href={`/contacts/${c.id}`} className="font-medium text-link hover:underline">
+                <Link href={`/contacts/${c.id}`} className="font-semibold text-link hover:underline">
                   {c.name}
                 </Link>
                 {c.inDbnd?.toLowerCase() === "yes" && <Pill label="In DBND" color="#6a78d1" />}
-                {c.labels.map((l) => (
-                  <Pill key={l} label={l} />
-                ))}
               </div>
               {c.jobTitle && <div className="text-ink-muted">{c.jobTitle}</div>}
+              <div className="group/email flex min-w-0 items-center gap-1">
+                <span className="shrink-0 text-ink-muted">Email:</span>
+                {c.email ? (
+                  <>
+                    <a href={`mailto:${c.email}`} className="truncate font-medium text-link hover:underline">
+                      {c.email}
+                    </a>
+                    <button
+                      className="shrink-0 opacity-0 group-hover/email:opacity-100 focus:opacity-100"
+                      onClick={() => {
+                        copyText(c.email!);
+                        toast({ message: "Copied email" });
+                      }}
+                      aria-label={`Copy ${c.name}'s email`}
+                    >
+                      <Copy className="size-3.5 text-ink-subtle" />
+                    </button>
+                  </>
+                ) : (
+                  <span className="text-ink-subtle">--</span>
+                )}
+              </div>
+              <ContactNumbers contact={c} />
               {c.timeZone && (
-                <div className="mt-0.5 text-[12px] text-ink-muted">
+                <div className="text-[12px] text-ink-muted">
                   <LocalTime tz={c.timeZone} suffix="local time" icon />
                 </div>
               )}
-              {c.email && (
-                <a href={`mailto:${c.email}`} className="block truncate text-[12px] text-link hover:underline">
-                  {c.email}
-                </a>
+              {c.labels.length > 0 && (
+                <div className="flex flex-wrap gap-1 pt-0.5">
+                  {c.labels.map((l) => (
+                    <Pill key={l} label={l} />
+                  ))}
+                </div>
               )}
             </div>
             <Tooltip content="Logged call attempts (CRT count)">
@@ -325,7 +421,10 @@ function ContactsCard({ card }: { card: CardConfig }) {
 
 function PhonesCard({ card }: { card: CardConfig }) {
   const { data, toast, openComposer, refresh } = useRecord();
-  const { shown, more, showAll } = useLimit(data.phones, card.limit);
+  // On a company, people's own lines sit on their contact cards; this card holds the company's lines
+  const isCompany = data.object === "COMPANY";
+  const phones = isCompany ? data.phones.filter((p) => !p.contactId) : data.phones;
+  const { shown, more, showAll } = useLimit(phones, card.limit);
   const [dialog, setDialog] = useState<{ editing: (PhoneInput & { id: string }) | null } | null>(null);
   const act = async (fn: () => Promise<{ ok: true } | { ok: false; error: string }>, message: string) => {
     const res = await fn();
@@ -336,8 +435,10 @@ function PhonesCard({ card }: { card: CardConfig }) {
   return (
     <RecordCard
       id={`right:${card.id}`}
-      title={card.title ?? "Phone numbers"}
-      count={data.phones.length}
+      title={isCompany && (!card.title || card.title === "Phone numbers") ? "Company numbers" : (card.title ?? "Phone numbers")}
+      icon={Phone}
+      accent={CARD_ACCENTS.phones}
+      count={phones.length}
       actions={
         <>
           <Button size="sm" variant="ghost" className="text-link" onClick={() => setDialog({ editing: null })}>
@@ -353,7 +454,7 @@ function PhonesCard({ card }: { card: CardConfig }) {
           <li key={p.id} className="group text-[13px]">
             <div className="flex items-center gap-1.5">
               <Phone className="size-3.5 shrink-0 text-ink-subtle" />
-              <a href={`tel:${p.number}`} className="font-medium tabular-nums text-link hover:underline">
+              <a href={phoneHref(p.extension ? `${p.number} ext. ${p.extension}` : p.number)} className="font-medium tabular-nums text-link hover:underline">
                 {formatPhone(p.number)}
                 {p.extension ? ` ext. ${p.extension}` : ""}
               </a>
@@ -413,8 +514,7 @@ function PhonesCard({ card }: { card: CardConfig }) {
             <div className="pl-5 text-[12px] text-ink-muted">
               {p.type}
               {data.object === "CONTACT" && p.source === "company" ? " · company line" : ""}
-              {data.object === "COMPANY" && p.contactName ? ` · ${p.contactName}` : ""}
-              {p.ivrPath ? ` · IVR: ${p.ivrPath}` : ""}
+                            {p.ivrPath ? ` · IVR: ${p.ivrPath}` : ""}
             </div>
             {p.notes && <div className="pl-5 text-[12px] text-ink-muted">{p.notes}</div>}
             <div className="flex items-center gap-2 pl-5 text-[12px] text-ink-subtle">
@@ -426,11 +526,114 @@ function PhonesCard({ card }: { card: CardConfig }) {
           </li>
         ))}
       </ul>
-      {!data.phones.length && <p className="text-[13px] text-ink-subtle">No phone numbers yet.</p>}
+      {!phones.length && <p className="text-[13px] text-ink-subtle">{isCompany ? "No company numbers yet. People's own numbers are on their contact cards." : "No phone numbers yet."}</p>}
       {more > 0 && (
         <button className="mt-1 text-[13px] text-link hover:underline" onClick={showAll}>
-          View all phone numbers ({data.phones.length})
+          View all phone numbers ({phones.length})
         </button>
+      )}
+    </RecordCard>
+  );
+}
+
+/** The company's own addresses (info@, sales@ …); people's emails are on their contact cards. */
+function CompanyEmailsCard() {
+  const { data, toast, refresh } = useRecord();
+  const emails = data.companyEmails;
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
+  const save = async (next: string[], message: string, undo = true) => {
+    const res = await saveCompanyEmails(data.id, next);
+    if (!res.ok) {
+      toast({ message: res.error });
+      return false;
+    }
+    const prev = emails;
+    toast({ message, ...(undo ? { undo: async () => void (await saveCompanyEmails(data.id, prev), refresh()) } : {}) });
+    refresh();
+    return true;
+  };
+  const add = async () => {
+    const e = draft.trim();
+    if (!e) return setAdding(false);
+    if (await save([...emails, e], `Added ${e}`, false)) {
+      setDraft("");
+      setAdding(false);
+    }
+  };
+  return (
+    <RecordCard
+      id="right:company-emails"
+      title="Company emails"
+      icon={Mail}
+      accent={CARD_ACCENTS.emails}
+      count={emails.length}
+      actions={
+        <Button size="sm" variant="ghost" className="text-link" onClick={() => setAdding(true)}>
+          <Plus /> Add
+        </Button>
+      }
+    >
+      <ul className="space-y-2">
+        {emails.map((e, i) => (
+          <li key={e} className="group flex items-center gap-1.5 text-[13px]">
+            <Mail className="size-3.5 shrink-0 text-ink-subtle" />
+            <a href={`mailto:${e}`} className="min-w-0 truncate font-medium text-link hover:underline">
+              {e}
+            </a>
+            <button
+              className="shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100"
+              onClick={() => {
+                copyText(e);
+                toast({ message: "Copied email" });
+              }}
+              aria-label={`Copy ${e}`}
+            >
+              <Copy className="size-3.5 text-ink-subtle" />
+            </button>
+            {i === 0 && emails.length > 1 && <span className="shrink-0 text-[12px] text-ink-muted">Main</span>}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="icon-sm" variant="ghost" className="ml-auto shrink-0" aria-label={`${e} options`}>
+                  <MoreHorizontal />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {i > 0 && <DropdownMenuItem onSelect={() => save([e, ...emails.filter((x) => x !== e)], `${e} is now the main company email`)}>Make main</DropdownMenuItem>}
+                <DropdownMenuItem destructive onSelect={() => save(emails.filter((x) => x !== e), `Removed ${e}`)}>
+                  Remove
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </li>
+        ))}
+      </ul>
+      {adding ? (
+        <form
+          className="mt-2 flex items-center gap-1.5"
+          onSubmit={(ev) => {
+            ev.preventDefault();
+            void add();
+          }}
+        >
+          <Input
+            type="email"
+            value={draft}
+            onChange={(ev) => setDraft(ev.target.value)}
+            onKeyDown={(ev) => ev.key === "Escape" && setAdding(false)}
+            placeholder={`info@${data.header.domain ?? "company.com"}`}
+            aria-label="New company email"
+            autoFocus
+          />
+          <Button size="sm" type="submit">
+            Save
+          </Button>
+          <Button size="sm" variant="ghost" type="button" onClick={() => setAdding(false)}>
+            Cancel
+          </Button>
+        </form>
+      ) : (
+        !emails.length && <p className="text-[13px] text-ink-subtle">No company emails yet. People&apos;s own emails are on their contact cards.</p>
       )}
     </RecordCard>
   );
@@ -442,6 +645,8 @@ function DealsCard({ card }: { card: CardConfig }) {
     <RecordCard
       id={`right:${card.id}`}
       title={card.title ?? "Deals"}
+      icon={Handshake}
+      accent={CARD_ACCENTS.deals}
       count={data.deals.length}
       actions={
         <>

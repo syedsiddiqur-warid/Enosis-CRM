@@ -5,6 +5,7 @@ import { companyCampaigns } from "./campaigns";
 import { loadQueryContext } from "./context";
 import { PROVIDERS, isConfigured } from "./integrations";
 import { OBJECT_LABELS } from "./defaults";
+import { companyEmailList } from "./company-emails";
 import { getPropertyGroups } from "./properties";
 import type { LayoutConfig, RecordActivity } from "./record-types";
 import { recordSegments } from "./segments";
@@ -121,10 +122,11 @@ export async function loadRecord(object: CrmObject, id: string, userId: string) 
 
   let header: { name: string; subtitle: string | null; email: string | null; domain: string | null; phone: string | null; timeZone: string | null; primaryCompany: { id: string; name: string } | null };
   let companies: { id: string; name: string; domain: string | null; phone: string | null; isPrimary: boolean; labels: string[] }[] = [];
-  let contacts: { id: string; name: string; jobTitle: string | null; email: string | null; inDbnd: string | null; crtCount: number; timeZone: string | null; labels: string[] }[] = [];
+  let contacts: { id: string; name: string; jobTitle: string | null; email: string | null; inDbnd: string | null; crtCount: number; timeZone: string | null; phone: string | null; mobile: string | null; labels: string[] }[] = [];
   let activityWhere: Prisma.ActivityWhereInput;
   let phoneWhere: Prisma.PhoneNumberWhereInput;
   let dealWhere: Prisma.DealWhereInput;
+  let companyEmails: string[] = [];
   let industry: string | null = null;
   let technologies: string[] = [];
 
@@ -156,11 +158,12 @@ export async function loadRecord(object: CrmObject, id: string, userId: string) 
     const co = record as Prisma.CompanyGetPayload<object>;
     const links = await db.contactCompany.findMany({
       where: { companyId: id, contact: { deletedAt: null } },
-      include: { contact: { select: { id: true, firstName: true, lastName: true, email: true, jobTitle: true, inDbnd: true, crtCount: true, timeZone: true } } },
+      include: { contact: { select: { id: true, firstName: true, lastName: true, email: true, jobTitle: true, inDbnd: true, crtCount: true, timeZone: true, phone: true, mobile: true } } },
       orderBy: { createdAt: "asc" },
     });
-    contacts = links.map((l) => ({ id: l.contact.id, name: fullName(l.contact), jobTitle: l.contact.jobTitle, email: l.contact.email, inDbnd: l.contact.inDbnd, crtCount: l.contact.crtCount, timeZone: l.contact.timeZone ?? co.timeZone, labels: l.labels }));
+    contacts = links.map((l) => ({ id: l.contact.id, name: fullName(l.contact), jobTitle: l.contact.jobTitle, email: l.contact.email, inDbnd: l.contact.inDbnd, crtCount: l.contact.crtCount, timeZone: l.contact.timeZone ?? co.timeZone, phone: l.contact.phone, mobile: l.contact.mobile, labels: l.labels }));
     values.targetCount = contacts.length;
+    companyEmails = companyEmailList(co);
     header = { name: co.name, subtitle: co.industry, email: co.email, domain: co.domain, phone: co.phone, timeZone: co.timeZone, primaryCompany: null };
     // Company timelines include its contacts' activities (but not their system events)
     activityWhere = {
@@ -233,6 +236,7 @@ export async function loadRecord(object: CrmObject, id: string, userId: string) 
     activitiesTruncated: activities.length === ACTIVITY_LIMIT,
     companies,
     contacts,
+    companyEmails,
     phones: phones.map((p) => ({
       id: p.id,
       number: p.number,

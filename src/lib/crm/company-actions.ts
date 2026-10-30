@@ -123,7 +123,7 @@ export async function intakeCompanies(input: IntakeInput): Promise<Result<Intake
       .map((l) => l.trim())
       .filter(Boolean);
     if (!rows.length) throw new Error("Paste at least one company");
-    if (rows.length > 500) throw new Error("Paste up to 500 companies at a time");
+    if (rows.length > 500) throw new Error("Paste up to 500 companies at a time. For more, use Import CSV / Excel");
 
     const out: IntakeResult = { created: [], duplicates: [], invalid: [], enriched: 0 };
     const seen = new Set<string>();
@@ -190,38 +190,64 @@ export async function intakeCompanies(input: IntakeInput): Promise<Result<Intake
 // ── Research board ──
 
 /** Dropping a card on a research board column sets the research properties; the journey follows from them. */
+async function moveOne(companyId: string, column: ResearchColumn, userId: string) {
+  const set = (p: string, v: unknown) => applyUpdate("COMPANY", companyId, p, v, userId);
+  const co = await db.company.findUniqueOrThrow({ where: { id: companyId }, select: { researchStatus: true, researcherId: true } });
+  if (!co.researcherId && column !== "to_research") await set("researcherId", userId);
+  switch (column) {
+    case "to_research":
+      await set("researchStatus", "Not started");
+      break;
+    case "researching":
+      await set("researchStatus", "In progress");
+      break;
+    case "researched":
+      await set("researchStatus", "Done");
+      break;
+    case "viable":
+      if (co.researchStatus !== "Done") await set("researchStatus", "Done");
+      await set("viable", "Yes");
+      break;
+    case "callable":
+      if (co.researchStatus !== "Done") await set("researchStatus", "Done");
+      await set("viable", "Yes");
+      await set("callable", "Yes");
+      break;
+    case "not_viable":
+      if (co.researchStatus !== "Done") await set("researchStatus", "Done");
+      await set("viable", "No");
+      break;
+  }
+}
+
 export async function moveResearchCard(companyId: string, column: ResearchColumn): Promise<Result> {
   try {
     const user = await requireUser();
-    const set = (p: string, v: unknown) => applyUpdate("COMPANY", companyId, p, v, user.id);
-    const co = await db.company.findUniqueOrThrow({ where: { id: companyId }, select: { researchStatus: true, researcherId: true } });
-    if (!co.researcherId && column !== "to_research") await set("researcherId", user.id);
-    switch (column) {
-      case "to_research":
-        await set("researchStatus", "Not started");
-        break;
-      case "researching":
-        await set("researchStatus", "In progress");
-        break;
-      case "researched":
-        await set("researchStatus", "Done");
-        break;
-      case "viable":
-        if (co.researchStatus !== "Done") await set("researchStatus", "Done");
-        await set("viable", "Yes");
-        break;
-      case "callable":
-        if (co.researchStatus !== "Done") await set("researchStatus", "Done");
-        await set("viable", "Yes");
-        await set("callable", "Yes");
-        break;
-      case "not_viable":
-        if (co.researchStatus !== "Done") await set("researchStatus", "Done");
-        await set("viable", "No");
-        break;
-    }
+    await moveOne(companyId, column, user.id);
     revalidateCompany(companyId);
     return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Move a batch of companies (the client sends large selections in chunks and shows progress). */
+export async function moveResearchCards(ids: string[], column: ResearchColumn): Promise<Result<{ moved: number; failed: number }>> {
+  try {
+    const user = await requireUser();
+    if (ids.length > 100) throw new Error("Send at most 100 companies per request");
+    let moved = 0;
+    let failed = 0;
+    // A few at a time: each move writes several fields, an audit row and the journey
+    for (let i = 0; i < ids.length; i += 4) {
+      const results = await Promise.allSettled(ids.slice(i, i + 4).map((id) => moveOne(id, column, user.id)));
+      for (const r of results) {
+        if (r.status === "fulfilled") moved++;
+        else failed++;
+      }
+    }
+    revalidateCompany();
+    return { ok: true, data: { moved, failed } };
   } catch (e) {
     return fail(e);
   }

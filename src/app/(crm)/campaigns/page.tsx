@@ -10,6 +10,6 @@ export default async function CampaignsPage({ searchParams }: { searchParams: Pr
   const user = await currentUser();
   if (!user) redirect("/login");
   const showArchived = (await searchParams).archived === "1";
-  const [data, segments] = await Promise.all([loadCampaigns(user.id, showArchived), segmentSummaries(user.id, "COMPANY")]);
+  const [data, segments] = await Promise.all([loadCampaigns(user.id, showArchived), segmentSummaries(user.id)]);
   return <CampaignsList data={data} segments={segments} showArchived={showArchived} />;
 }

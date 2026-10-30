@@ -1,4 +1,4 @@
-import { PhoneCall } from "lucide-react";
+import { FlaskConical, PhoneCall } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { currentUser } from "@/auth";
@@ -10,7 +10,7 @@ export const metadata = { title: "Calling Queue" };
 export default async function ProspectingPage() {
   const user = await currentUser();
   if (!user) redirect("/login");
-  const { campaigns } = await loadQueueIndex(user.id);
+  const { campaigns, researchBack } = await loadQueueIndex(user.id);
   return (
     <div className="thin-scroll h-full overflow-y-auto rounded-[6px] border border-line bg-surface px-6 py-5">
       <h1 className="text-[22px] font-medium">Calling Queue</h1>
@@ -18,6 +18,30 @@ export default async function ProspectingPage() {
         Work through a campaign one company at a time: due follow-ups first, then companies not called yet, then retries. Each outcome you log updates the company&apos;s campaign outcome, lead journey
         and call history, and moves you to the next company.
       </p>
+
+      {researchBack.length > 0 && (
+        <section className="mt-5 rounded-[6px] border border-[#00bda5] bg-[#e5f8f6] p-4">
+          <h2 className="flex items-center gap-2 text-[15px] font-medium">
+            <FlaskConical className="size-4 text-[#00806e]" /> Research is back for you ({researchBack.length})
+          </h2>
+          <p className="mb-2 text-[12px] text-ink-muted">These companies are at the top of their campaign queue. Open one to see the result and call.</p>
+          <ul className="space-y-1.5">
+            {researchBack.map((r) => (
+              <li key={r.id} className="rounded-[4px] border border-line bg-surface px-3 py-2 text-[13px]">
+                <Link href={r.campaignId ? `/prospecting/${r.campaignId}?caller=all&id=${r.companyId}` : `/companies/${r.companyId}`} className="font-medium text-link hover:underline">
+                  {r.company}
+                </Link>
+                <span className="text-ink-muted"> · {r.kind}</span>
+                {r.result && <div className="line-clamp-2 text-ink">{r.result}</div>}
+                <div className="text-[12px] text-ink-subtle">
+                  {r.researcher ? `${r.researcher}, ` : ""}
+                  {r.resolvedAt ? formatDate(r.resolvedAt) : ""}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {campaigns.map((c) => (

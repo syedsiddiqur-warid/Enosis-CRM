@@ -21,6 +21,8 @@ export function RecordCard({
   children,
   className,
   bodyClassName,
+  icon: Icon,
+  accent = "var(--border-strong)",
 }: {
   id: string;
   title: React.ReactNode;
@@ -29,27 +31,35 @@ export function RecordCard({
   children: React.ReactNode;
   className?: string;
   bodyClassName?: string;
+  /** Shown before the title in the accent color */
+  icon?: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
+  /** Color of the header's side bar and icon, so important sections stand out */
+  accent?: string;
 }) {
   const { isCollapsed, toggleCard } = useRecord();
   const collapsed = isCollapsed(id);
   return (
-    <section className={cn("border-b border-line last:border-b-0", className)}>
-      <div className="flex min-h-11 items-center gap-1 px-4">
+    <section className={cn("overflow-hidden rounded-[6px] border border-line bg-surface shadow-sm", className)}>
+      <div className={cn("flex min-h-11 items-center gap-1 border-l-4 bg-surface-muted px-3", !collapsed && "border-b border-b-line")} style={{ borderLeftColor: accent }}>
         <button
           className="flex min-w-0 flex-1 items-center gap-1.5 py-2.5 text-left text-[14px] font-semibold"
           onClick={() => toggleCard(id)}
           aria-expanded={!collapsed}
         >
           {collapsed ? <ChevronRight className="size-4 shrink-0 text-ink-muted" /> : <ChevronDown className="size-4 shrink-0 text-ink-muted" />}
+          {Icon && <Icon className="size-4 shrink-0" style={{ color: accent }} />}
           <span className="truncate">{title}</span>
-          {count !== undefined && <span className="font-normal text-ink-subtle">({count})</span>}
+          {count !== undefined && <span className="rounded-full bg-surface px-1.5 text-[12px] font-medium text-ink-muted ring-1 ring-line">{count}</span>}
         </button>
         {!collapsed && actions}
       </div>
-      {!collapsed && <div className={cn("px-4 pb-4", bodyClassName)}>{children}</div>}
+      {!collapsed && <div className={cn("px-4 pb-4 pt-3", bodyClassName)}>{children}</div>}
     </section>
   );
 }
+
+/** Accent colors for the sections people look for first */
+export const CARD_ACCENTS = { contacts: "#0091ae", phones: "#00a38d", emails: "#ff7a59", keyInfo: "#7c5cfc", deals: "#f5a623" };
 
 export function CardGear({ label, step = 11 }: { label: string; step?: number }) {
   return (

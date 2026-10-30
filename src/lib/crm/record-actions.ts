@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { fullName } from "@/lib/utils";
 import { bulkDelete } from "./actions";
 import { runActivityRules } from "./automation";
+import { syncCompaniesFromPeople } from "./campaigns";
 import { OBJECT_LABELS } from "./defaults";
 import { STAGE, memberStatusForCall, nextCallStatus, phoneStatusForCall, stageForCall } from "./journey";
 import { advanceJourney } from "./record-writes";
@@ -195,7 +196,25 @@ export async function logActivity(object: CrmObject, recordId: string, input: Ac
       }
       if (campaignId) {
         const key = { campaignId_companyId: { campaignId, companyId } };
-        const m = await db.campaignCompany.findUnique({ where: key });
+        const m = await db.campaignCompany.findUnique({ where: key, include: { campaign: { select: { audience: true } } } });
+        const forPeople = m?.campaign.audience === "CONTACT";
+        // Contact campaigns: the targeted person's own outcome and attempts, then the company follows its people
+        if (m && forPeople && isCall && target) {
+          const pKey = { campaignId_contactId: { campaignId, contactId: target } };
+          const p = await db.campaignContact.findUnique({ where: pKey });
+          if (p && !p.removedAt) {
+            await db.campaignContact.update({
+              where: pKey,
+              data: {
+                attempts: { increment: 1 },
+                ...(connected ? { connects: { increment: 1 } } : {}),
+                lastResult: input.callResult,
+                status: memberStatusForCall(p.status, input.callResult),
+                ...(happened ? { lastCallAt: at } : {}),
+              },
+            });
+          }
+        }
         if (m) {
           await db.campaignCompany.update({
             where: key,
@@ -206,13 +225,14 @@ export async function logActivity(object: CrmObject, recordId: string, input: Ac
                   // Whoever calls an unassigned company takes it
                   ...(m.assignedToId ? {} : { assignedToId: user.id }),
                   lastResult: input.callResult,
-                  status: memberStatusForCall(m.status, input.callResult),
+                  ...(forPeople ? {} : { status: memberStatusForCall(m.status, input.callResult) }),
                   ...(happened ? { lastCallAt: at } : {}),
                   // The call handled the due action; the follow-up (if any) sets the next one
                   nextActionAt: input.followUp ? new Date(input.followUp.dueAt) : null,
                 }
               : { status: ["Disqualified", "Completed"].includes(m.status) ? m.status : "Meeting booked" },
           });
+          if (forPeople && isCall) await syncCompaniesFromPeople(campaignId, [companyId]);
         }
       }
       const stage = isCall ? stageForCall(input.callResult) : input.type === "MEETING" ? STAGE.meeting : null;
@@ -289,6 +309,12 @@ async function adjustCallCounts(a: { id: string; targetContactId: string | null;
       const m = await db.campaignCompany.findUnique({ where: { campaignId_companyId: { campaignId: a.campaignId, companyId: company.id } } });
       if (m) await db.campaignCompany.update({ where: { campaignId_companyId: { campaignId: a.campaignId, companyId: company.id } }, data: { attempts: bump(m.attempts), ...(connected ? { connects: bump(m.connects) } : {}) } });
     }
+  }
+  // Contact campaigns count attempts per person too
+  if (a.campaignId && a.targetContactId) {
+    const key = { campaignId_contactId: { campaignId: a.campaignId, contactId: a.targetContactId } };
+    const p = await db.campaignContact.findUnique({ where: key });
+    if (p) await db.campaignContact.update({ where: key, data: { attempts: bump(p.attempts), ...(connected ? { connects: bump(p.connects) } : {}) } });
   }
 }
 

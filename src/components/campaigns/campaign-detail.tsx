@@ -25,6 +25,7 @@ import {
 import { searchCompanies } from "@/lib/crm/actions";
 import {
   addCompaniesToCampaign,
+  addPeopleToCampaign,
   addSegmentToCampaign,
   assignMembers,
   cloneCampaign,
@@ -32,6 +33,8 @@ import {
   distributeUnassigned,
   previewCriteria,
   removeFromCampaign,
+  removePeopleFromCampaign,
+  restorePeopleToCampaign,
   restoreToCampaign,
   setMemberStatus,
   syncCampaignNow,
@@ -40,6 +43,7 @@ import {
 import type { CampaignData } from "@/lib/crm/campaign-loader";
 import type { CampaignSettings } from "@/lib/crm/campaigns";
 import { formatDate, localTime } from "@/lib/crm/dates";
+import { searchContacts } from "@/lib/crm/record-actions";
 import type { FilterGroup } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import { Bars, CAMPAIGN_STATUS, CampaignStatusPill, OptionPill, StatTile } from "./campaign-ui";
@@ -159,21 +163,33 @@ export function CampaignDetail({ data }: { data: CampaignData }) {
           </div>
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-ink-muted">
             <span>{c.type}</span>
+            {c.audience === "CONTACT" && (
+              <span className="inline-flex items-center gap-1 font-medium text-[#4b58b0]">
+                <Users className="size-3.5" /> Contact campaign: only the chosen people are called
+              </span>
+            )}
             <span>Owner: {c.owner?.name ?? "--"}</span>
             <span>{c.startDate || c.endDate ? `${formatDate(c.startDate) || "…"} – ${formatDate(c.endDate) || "…"}` : "No dates set"}</span>
-            <span>{c.criteria.length ? (c.settings.autoAdd ? "Adds new matches automatically" : "Criteria-based, manual sync") : "Hand-picked set"}</span>
+            {c.audience === "COMPANY" && <span>{c.criteria.length ? (c.settings.autoAdd ? "Adds new matches automatically" : "Criteria-based, manual sync") : "Hand-picked set"}</span>}
           </div>
           {c.description && <p className="mt-2 max-w-[900px] text-[13px]">{c.description}</p>}
         </section>
 
         {/* KPIs */}
         <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-          <StatTile label="Companies" value={stats.members} goal={c.goals.companies} />
+          {c.audience === "CONTACT" ? (
+            <>
+              <StatTile label="People" value={stats.people} hint={`at ${stats.members} ${stats.members === 1 ? "company" : "companies"}`} />
+              <StatTile label="People reached" value={stats.peopleReached} hint={stats.people ? `${Math.round((stats.peopleReached / stats.people) * 100)}% of the people` : undefined} />
+            </>
+          ) : (
+            <StatTile label="Companies" value={stats.members} goal={c.goals.companies} />
+          )}
           <StatTile label="Worked" value={stats.called} hint={stats.members ? `${Math.round((stats.called / stats.members) * 100)}% of the set` : undefined} />
-          <StatTile label="Calls logged" value={stats.calls} hint={c.settings.maxAttempts ? `Up to ${c.settings.maxAttempts} attempts per company` : undefined} />
+          <StatTile label="Calls logged" value={stats.calls} hint={c.settings.maxAttempts ? `Up to ${c.settings.maxAttempts} attempts per ${c.audience === "CONTACT" ? "person" : "company"}` : undefined} />
           <StatTile label="Connects" value={stats.connects} goal={c.goals.connects} hint={connectRate !== null ? `${connectRate}% connect rate` : undefined} />
-          <StatTile label="Meetings booked" value={stats.meetings} goal={c.goals.meetings} />
-          <StatTile label="Not called yet" value={remaining} />
+          <StatTile label="Meetings booked" value={c.audience === "CONTACT" ? stats.peopleMeetings : stats.meetings} goal={c.goals.meetings} />
+          {c.audience === "COMPANY" && <StatTile label="Not called yet" value={remaining} />}
         </section>
 
         <section className="grid gap-3 lg:grid-cols-3">
@@ -195,22 +211,28 @@ export function CampaignDetail({ data }: { data: CampaignData }) {
         {/* Tabs */}
         <section className="rounded-[6px] border border-line bg-surface">
           <div className="flex items-end gap-1 border-b border-line px-5 pt-2">
-            {(
-              [
-                ["companies", `Companies (${stats.members})`],
-                ["criteria", "Criteria"],
-                ["settings", "Pitch, goals & settings"],
-              ] as const
-            ).map(([k, label]) => (
+            {(c.audience === "CONTACT"
+              ? ([
+                  ["people", `People (${stats.people})`],
+                  ["companies", `Companies (${stats.members})`],
+                  ["settings", "Pitch, goals & settings"],
+                ] as const)
+              : ([
+                  ["companies", `Companies (${stats.members})`],
+                  ["criteria", "Criteria"],
+                  ["settings", "Pitch, goals & settings"],
+                ] as const)
+            ).map(([k, label], i) => (
               <button
                 key={k}
-                onClick={() => setParams({ tab: k === "companies" ? null : k })}
+                onClick={() => setParams({ tab: i === 0 ? null : k })}
                 className={cn("-mb-px border-b-[3px] px-4 py-2.5 text-[14px]", data.tab === k ? "border-[#2d3e50] font-medium" : "border-transparent text-ink-muted hover:text-ink")}
               >
                 {label}
               </button>
             ))}
           </div>
+          {data.tab === "people" && <PeopleTab data={data} setParams={setParams} run={run} />}
           {data.tab === "companies" && <MembersTab data={data} setParams={setParams} run={run} />}
           {data.tab === "criteria" && <CriteriaTab data={data} run={run} />}
           {data.tab === "settings" && <SettingsTab data={data} run={run} />}
@@ -361,15 +383,17 @@ function MembersTab({ data, setParams, run }: { data: CampaignData; setParams: (
           </Select>
           {data.canEdit && (
             <div className="ml-auto flex items-center gap-1">
-              <AddCompanies
-                onPick={(id) =>
-                  run(async () => {
-                    const res = await addCompaniesToCampaign(c.id, [id]);
-                    if (!res.ok) return res;
-                    return { ok: true, message: res.data!.added ? "Company added" : "Already in this campaign" };
-                  })
-                }
-              />
+              {c.audience === "COMPANY" && (
+                <AddCompanies
+                  onPick={(id) =>
+                    run(async () => {
+                      const res = await addCompaniesToCampaign(c.id, [id]);
+                      if (!res.ok) return res;
+                      return { ok: true, message: res.data!.added ? "Company added" : "Already in this campaign" };
+                    })
+                  }
+                />
+              )}
               <AddSegment data={data} run={run} />
               <Distribute data={data} run={run} />
             </div>
@@ -418,7 +442,13 @@ function MembersTab({ data, setParams, run }: { data: CampaignData; setParams: (
                         {m.name}
                       </Link>
                       <div className="truncate text-[12px] text-ink-subtle">
-                        {[m.industry, m.employees ? `${m.employees.toLocaleString()} emp.` : null, `${m.contacts} contacts`].filter(Boolean).join(" · ")}
+                        {[
+                          m.industry,
+                          m.employees ? `${m.employees.toLocaleString()} emp.` : null,
+                          data.people ? `${data.people.perCompany[m.companyId] ?? 0} of ${m.contacts} people targeted` : `${m.contacts} contacts`,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
                       </div>
                     </div>
                   </div>
@@ -469,7 +499,11 @@ function MembersTab({ data, setParams, run }: { data: CampaignData; setParams: (
           <div className="py-14 text-center">
             <div className="mb-1 text-[16px] font-medium">{data.stats.members ? "No companies match" : "No companies in this campaign yet"}</div>
             <div className="text-[13px] text-ink-muted">
-              {data.stats.members ? "Change the outcome, caller or search filter." : "Set criteria, add a company segment, or add companies from the Companies list."}
+              {data.stats.members
+                ? "Change the outcome, caller or search filter."
+                : c.audience === "CONTACT"
+                  ? "Add a contact segment, or add people from the Contacts list. Their companies appear here."
+                  : "Set criteria, add a company segment, or add companies from the Companies list."}
             </div>
           </div>
         )}
@@ -498,6 +532,246 @@ function MembersTab({ data, setParams, run }: { data: CampaignData; setParams: (
         </div>
       </div>
     </div>
+  );
+}
+
+// ── People tab (Contact campaigns) ──
+
+function PeopleTab({ data, setParams, run }: { data: CampaignData; setParams: (p: Record<string, string | null>) => void; run: Run }) {
+  const c = data.campaign;
+  const p = data.people!;
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [q, setQ] = useState(p.q);
+  const ids = [...selected];
+  const allSelected = p.rows.length > 0 && p.rows.every((r) => selected.has(r.contactId));
+  const pageCount = Math.max(1, Math.ceil(p.total / data.pageSize));
+  const max = c.settings.maxAttempts;
+  const color = (status: string) => data.memberStatuses.find((o) => o.value === status)?.color;
+
+  useEffect(() => {
+    if (q === p.q) return;
+    const t = setTimeout(() => setParams({ pq: q || null, ppage: null }), 300);
+    return () => clearTimeout(t);
+  }, [q, p.q, setParams]);
+  useEffect(() => setSelected(new Set()), [p.rows]);
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-1 px-5 pt-3">
+        {[{ value: "", label: "All" }, ...data.memberStatuses].map((o) => {
+          const n = o.value ? (p.byStatus[o.value] ?? 0) : data.stats.people;
+          if (o.value && !n && p.statusFilter !== o.value) return null;
+          return (
+            <button
+              key={o.value || "all"}
+              onClick={() => setParams({ pstatus: o.value || null, ppage: null })}
+              className={cn("rounded-full border px-3 py-1 text-[12px]", p.statusFilter === o.value ? "border-link bg-[#e5f5f8] font-medium" : "border-line hover:bg-surface-hover")}
+            >
+              {o.label} <span className="text-ink-subtle">{n}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {selected.size > 0 ? (
+        <div className="flex flex-wrap items-center gap-2 bg-[#e5f5f8] px-5 py-2.5 text-[13px]">
+          <span className="font-medium">{selected.size} selected</span>
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+            Clear
+          </Button>
+          {data.canEdit && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-danger"
+              onClick={() =>
+                run(
+                  async () => {
+                    const res = await removePeopleFromCampaign(c.id, ids);
+                    if (!res.ok) return res;
+                    const gone = res.data!.companiesRemoved;
+                    return { ok: true, message: `Removed ${ids.length} ${ids.length === 1 ? "person" : "people"}${gone ? `; ${gone} ${gone === 1 ? "company has" : "companies have"} nobody left and left the campaign` : ""}` };
+                  },
+                  undefined,
+                  async () => void (await restorePeopleToCampaign(c.id, ids)),
+                )
+              }
+            >
+              Remove from campaign
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2 px-5 py-3">
+          <div className="relative w-[260px]">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-subtle" />
+            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people, titles or companies" className="pl-8" aria-label="Search people in campaign" />
+          </div>
+          {data.canEdit && (
+            <div className="ml-auto flex items-center gap-1">
+              <AddPeople
+                onPick={(id) =>
+                  run(async () => {
+                    const res = await addPeopleToCampaign(c.id, [id]);
+                    if (!res.ok) return res;
+                    const d = res.data!;
+                    return { ok: true, message: d.added ? "Person added" : d.skipped ? "This person has no company, so they can't be called from the queue" : "Already in this campaign" };
+                  })
+                }
+              />
+              <AddSegment data={data} run={run} />
+              <Distribute data={data} run={run} />
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="thin-scroll overflow-x-auto border-t border-line">
+        <table className="w-full min-w-[1000px] border-separate border-spacing-0 text-[13px]">
+          <thead className="bg-surface-muted text-left text-[11px] uppercase tracking-wide">
+            <tr>
+              <th className="h-10 w-10 border-b border-line px-3">
+                <Checkbox
+                  checked={allSelected ? true : selected.size ? "indeterminate" : false}
+                  onCheckedChange={() => setSelected(allSelected ? new Set() : new Set(p.rows.map((r) => r.contactId)))}
+                  aria-label="Select all on this page"
+                />
+              </th>
+              {["Person", "Company", "Outcome", "Calls", "Last result", "Last call", "Local time"].map((h) => (
+                <th key={h} className={cn("border-b border-line px-3 font-semibold", h === "Calls" && "text-right")}>
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {p.rows.map((r) => (
+              <tr key={r.contactId} className={cn("hover:bg-[#f5f8fa]", selected.has(r.contactId) && "bg-[#f0f9fb]")}>
+                <td className="border-b border-line px-3">
+                  <Checkbox
+                    checked={selected.has(r.contactId)}
+                    onCheckedChange={(v) => {
+                      const n = new Set(selected);
+                      if (v) n.add(r.contactId);
+                      else n.delete(r.contactId);
+                      setSelected(n);
+                    }}
+                    aria-label={`Select ${r.name}`}
+                  />
+                </td>
+                <td className="h-12 max-w-[260px] border-b border-line px-3">
+                  <Link href={`/contacts/${r.contactId}`} className="block truncate font-medium text-link hover:underline">
+                    {r.name}
+                  </Link>
+                  <div className="truncate text-[12px] text-ink-subtle">
+                    {[r.jobTitle, r.email].filter(Boolean).join(" · ") || "--"}
+                    {r.doNotCall && <span className="ml-1 text-danger">· Do not call</span>}
+                  </div>
+                </td>
+                <td className="max-w-[220px] border-b border-line px-3">
+                  <div className="flex items-center gap-2">
+                    <CompanyLogo name={r.company} domain={r.domain} size={20} />
+                    <Link href={`/companies/${r.companyId}`} className="truncate text-link hover:underline">
+                      {r.company}
+                    </Link>
+                  </div>
+                </td>
+                <td className="whitespace-nowrap border-b border-line px-3">
+                  <Pill label={r.status} color={color(r.status)} />
+                </td>
+                <td className={cn("whitespace-nowrap border-b border-line px-3 text-right tabular-nums", max && r.attempts >= max && "font-medium text-danger")}>
+                  {r.attempts}
+                  {max ? <span className="text-ink-subtle"> / {max}</span> : null}
+                  {r.connects ? <span className="text-[12px] text-[#00a38d]"> · {r.connects} conn.</span> : null}
+                </td>
+                <td className="whitespace-nowrap border-b border-line px-3">{r.lastResult ?? <span className="text-ink-subtle">--</span>}</td>
+                <td className="whitespace-nowrap border-b border-line px-3 text-ink-muted">{r.lastCallAt ? formatDate(r.lastCallAt) : "--"}</td>
+                <td className="whitespace-nowrap border-b border-line px-3 text-ink-muted">{localTime(r.timeZone) ?? "--"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!p.rows.length && (
+          <div className="py-14 text-center">
+            <div className="mb-1 text-[16px] font-medium">{data.stats.people ? "No people match" : "No people in this campaign yet"}</div>
+            <div className="text-[13px] text-ink-muted">
+              {data.stats.people ? "Change the outcome or search filter." : "Add a contact segment, add people one by one, or select people on the Contacts list and choose Add to campaign."}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center gap-1 border-t border-line px-5 py-2.5 text-[13px]">
+        <span className="text-ink-muted">{p.total} people</span>
+        <div className="ml-auto flex items-center gap-1">
+          <Button size="icon-sm" variant="ghost" disabled={p.page <= 1} onClick={() => setParams({ ppage: String(p.page - 1) })} aria-label="Previous page">
+            <ChevronLeft />
+          </Button>
+          {pageNumbers(p.page, pageCount).map((n, i) =>
+            n === null ? (
+              <span key={i} className="px-1 text-ink-subtle">
+                …
+              </span>
+            ) : (
+              <Button key={i} size="sm" variant={n === p.page ? "outline" : "ghost"} onClick={() => setParams({ ppage: n === 1 ? null : String(n) })}>
+                {n}
+              </Button>
+            ),
+          )}
+          <Button size="icon-sm" variant="ghost" disabled={p.page >= pageCount} onClick={() => setParams({ ppage: String(p.page + 1) })} aria-label="Next page">
+            <ChevronRight />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AddPeople({ onPick }: { onPick: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<{ id: string; name: string; subtitle: string | null }[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    const t = setTimeout(async () => {
+      const r = await searchContacts(q);
+      if (live) setResults(r);
+    }, 200);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [open, q]);
+  return (
+    <Popover open={open} onOpenChange={(o) => (setOpen(o), o && setQ(""))}>
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="secondary">
+          <Plus /> Add person
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[300px] p-0">
+        <div className="p-2">
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people" autoFocus aria-label="Search people to add" />
+        </div>
+        <div className="thin-scroll max-h-[260px] overflow-y-auto pb-1">
+          {results.map((r) => (
+            <button
+              key={r.id}
+              className="block w-full px-3 py-1.5 text-left text-[13px] hover:bg-surface-hover"
+              onClick={() => {
+                setOpen(false);
+                onPick(r.id);
+              }}
+            >
+              <div className="truncate">{r.name}</div>
+              {r.subtitle && <div className="truncate text-[12px] text-ink-subtle">{r.subtitle}</div>}
+            </button>
+          ))}
+          {!results.length && <div className="px-3 py-2 text-[13px] text-ink-subtle">No matches</div>}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -551,6 +825,16 @@ function AddCompanies({ onPick }: { onPick: (id: string) => void }) {
 
 function AddSegment({ data, run }: { data: CampaignData; run: Run }) {
   const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const match = (s: { name: string }) => s.name.toLowerCase().includes(q.trim().toLowerCase());
+  // Company campaigns: contact segments add the companies those people work at. Contact campaigns: exactly the people.
+  const forPeople = data.campaign.audience === "CONTACT";
+  const sections = forPeople
+    ? ([["Contact segments", data.contactSegments.filter(match)]] as const)
+    : ([
+        ["Company segments", data.segments.filter(match)],
+        ["Contact segments (adds their companies)", data.contactSegments.filter(match)],
+      ] as const);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -558,26 +842,41 @@ function AddSegment({ data, run }: { data: CampaignData; run: Run }) {
           <ListPlus /> Add segment
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[280px] p-0">
-        <div className="border-b border-line px-3 py-2 text-[12px] font-semibold">Add every company in a segment</div>
-        <div className="thin-scroll max-h-[260px] overflow-y-auto py-1">
-          {data.segments.map((s) => (
-            <button
-              key={s.id}
-              className="block w-full truncate px-3 py-1.5 text-left text-[13px] hover:bg-surface-hover"
-              onClick={() => {
-                setOpen(false);
-                run(async () => {
-                  const res = await addSegmentToCampaign(data.campaign.id, s.id);
-                  if (!res.ok) return res;
-                  return { ok: true, message: `${s.name}: ${addedText(res.data!.added)}` };
-                });
-              }}
-            >
-              {s.name}
-            </button>
-          ))}
-          {!data.segments.length && <div className="px-3 py-2 text-[13px] text-ink-subtle">No company segments yet</div>}
+      <PopoverContent align="end" className="w-[300px] p-0">
+        <div className="border-b border-line px-3 py-2 text-[12px] font-semibold">{forPeople ? "Add every person in a contact segment" : "Add every company in a segment"}</div>
+        <div className="border-b border-line p-2">
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search segments" aria-label="Search segments" autoFocus />
+        </div>
+        <div className="thin-scroll max-h-[320px] overflow-y-auto py-1">
+          {sections.map(([label, list]) =>
+            list.length ? (
+              <div key={label}>
+                <div className="px-3 pb-0.5 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-subtle">{label}</div>
+                {list.map((s) => (
+                  <button
+                    key={s.id}
+                    className="block w-full truncate px-3 py-1.5 text-left text-[13px] hover:bg-surface-hover"
+                    onClick={() => {
+                      setOpen(false);
+                      run(async () => {
+                        const res = await addSegmentToCampaign(data.campaign.id, s.id);
+                        if (!res.ok) return res;
+                        const d = res.data!;
+                        const text =
+                          d.unit === "person"
+                            ? `${d.added ? `${d.added} new ${d.added === 1 ? "person" : "people"} added` : "no new people to add"}${d.skipped ? `, ${d.skipped} skipped (no company)` : ""}`
+                            : addedText(d.added);
+                        return { ok: true, message: `${s.name}: ${text}` };
+                      });
+                    }}
+                  >
+                    {s.name}
+                  </button>
+                ))}
+              </div>
+            ) : null,
+          )}
+          {!sections.some(([, list]) => list.length) && <div className="px-3 py-2 text-[13px] text-ink-subtle">{q ? "No segments match" : "No segments yet"}</div>}
         </div>
       </PopoverContent>
     </Popover>

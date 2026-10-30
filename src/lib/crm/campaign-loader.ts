@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { fullName } from "@/lib/utils";
 import { campaignStats, parseSettings, syncCampaign, type CampaignGoals } from "./campaigns";
 import { loadQueryContext, parseSegmentGroups } from "./context";
 import { getPropertyGroups } from "./properties";
@@ -39,6 +40,7 @@ export async function loadCampaigns(userId: string, showArchived: boolean) {
       name: c.name,
       description: c.description,
       type: c.type,
+      audience: c.audience,
       status: c.status,
       owner: c.owner ? { id: c.owner.id, name: c.owner.name ?? c.owner.email } : null,
       startDate: c.startDate?.toISOString() ?? null,
@@ -61,6 +63,10 @@ export interface CampaignSearchParams {
   page?: string;
   tab?: string;
   owner?: string;
+  /** People tab (Contact campaigns) */
+  pstatus?: string;
+  pq?: string;
+  ppage?: string;
 }
 
 export async function loadCampaign(id: string, userId: string, sp: CampaignSearchParams) {
@@ -116,16 +122,20 @@ export async function loadCampaign(id: string, userId: string, sp: CampaignSearc
     optionList("campaignMemberStatus"),
     optionList("callResult"),
     optionList("campaignType"),
-    segmentSummaries(userId, "COMPANY"),
+    segmentSummaries(userId),
     getPropertyGroups("COMPANY"),
     canEditCampaign(campaign, userId),
   ]);
   const journeyOptions = ctx.defs.COMPANY.find((d) => d.name === "leadState")?.options ?? [];
+  const people = campaign.audience === "CONTACT" ? await loadPeople(id, sp, members.map((m) => m.companyId)) : null;
+  const tabs = campaign.audience === "CONTACT" ? ["people", "companies", "settings"] : ["companies", "criteria", "settings"];
 
   return {
+    people,
     campaign: {
       id: campaign.id,
       name: campaign.name,
+      audience: campaign.audience as "COMPANY" | "CONTACT",
       description: campaign.description,
       type: campaign.type,
       status: campaign.status,
@@ -170,7 +180,7 @@ export async function loadCampaign(id: string, userId: string, sp: CampaignSearc
     q,
     statusFilter: sp.status ?? "",
     ownerFilter: sp.owner ?? "",
-    tab: sp.tab === "criteria" || sp.tab === "settings" ? sp.tab : "companies",
+    tab: (sp.tab && tabs.includes(sp.tab) ? sp.tab : tabs[0]) as "people" | "companies" | "criteria" | "settings",
     users: users as UserLite[],
     memberStatuses,
     callResults,
@@ -180,7 +190,9 @@ export async function loadCampaign(id: string, userId: string, sp: CampaignSearc
     defs: ctx.defs.COMPANY,
     associatedDefs: ctx.defs.CONTACT,
     relatedDefs: ctx.relatedDefs,
-    segments,
+    // Criteria filter on company segments; "Add segment" also offers contact segments
+    segments: segments.filter((s) => s.objectType === "COMPANY"),
+    contactSegments: segments.filter((s) => s.objectType === "CONTACT"),
     groups,
     canEdit,
     currentUserId: userId,
@@ -188,3 +200,66 @@ export async function loadCampaign(id: string, userId: string, sp: CampaignSearc
 }
 
 export type CampaignData = NonNullable<Awaited<ReturnType<typeof loadCampaign>>>;
+
+/** Contact campaigns: the targeted people (one page), and how many are targeted at each listed company. */
+async function loadPeople(campaignId: string, sp: CampaignSearchParams, companyIds: string[]) {
+  const page = Math.max(1, Number(sp.ppage) || 1);
+  const q = sp.pq?.trim() ?? "";
+  const where: Prisma.CampaignContactWhereInput = {
+    campaignId,
+    removedAt: null,
+    contact: { deletedAt: null },
+    ...(sp.pstatus ? { status: sp.pstatus } : {}),
+    ...(q
+      ? {
+          OR: [
+            { contact: { firstName: { contains: q, mode: "insensitive" } } },
+            { contact: { lastName: { contains: q, mode: "insensitive" } } },
+            { contact: { email: { contains: q, mode: "insensitive" } } },
+            { contact: { jobTitle: { contains: q, mode: "insensitive" } } },
+            { company: { name: { contains: q, mode: "insensitive" } } },
+          ],
+        }
+      : {}),
+  };
+  const [rows, total, byStatus, perCompany] = await Promise.all([
+    db.campaignContact.findMany({
+      where,
+      include: {
+        contact: { select: { id: true, firstName: true, lastName: true, email: true, jobTitle: true, doNotCall: true } },
+        company: { select: { id: true, name: true, domain: true, timeZone: true } },
+      },
+      orderBy: [{ company: { name: "asc" } }, { addedAt: "asc" }],
+      skip: (page - 1) * PAGE_SIZE,
+      take: PAGE_SIZE,
+    }),
+    db.campaignContact.count({ where }),
+    db.campaignContact.groupBy({ by: ["status"], where: { campaignId, removedAt: null }, _count: { _all: true } }),
+    db.campaignContact.groupBy({ by: ["companyId"], where: { campaignId, removedAt: null, companyId: { in: companyIds } }, _count: { _all: true } }),
+  ]);
+  return {
+    rows: rows.map((p) => ({
+      contactId: p.contactId,
+      name: fullName(p.contact),
+      jobTitle: p.contact.jobTitle,
+      email: p.contact.email,
+      doNotCall: p.contact.doNotCall,
+      companyId: p.companyId,
+      company: p.company.name,
+      domain: p.company.domain,
+      timeZone: p.company.timeZone,
+      status: p.status,
+      attempts: p.attempts,
+      connects: p.connects,
+      lastResult: p.lastResult,
+      lastCallAt: p.lastCallAt?.toISOString() ?? null,
+      addedVia: p.addedVia,
+    })),
+    total,
+    page,
+    q,
+    statusFilter: sp.pstatus ?? "",
+    byStatus: Object.fromEntries(byStatus.map((s) => [s.status, s._count._all])) as Record<string, number>,
+    perCompany: Object.fromEntries(perCompany.map((c) => [c.companyId, c._count._all])) as Record<string, number>,
+  };
+}

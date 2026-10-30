@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/auth";
 import { db } from "@/lib/db";
 import { canEditCampaign } from "./campaign-loader";
-import { DEFAULT_SETTINGS, MEMBER_STATUSES, addMembers, criteriaWhere, parseSettings, syncCampaign, type CampaignGoals, type CampaignSettings } from "./campaigns";
+import { DEFAULT_SETTINGS, MEMBER_STATUSES, addMembers, addPeople, criteriaWhere, parseSettings, syncCampaign, syncCompaniesFromPeople, type CampaignGoals, type CampaignSettings } from "./campaigns";
 import { loadQueryContext } from "./context";
 import { JOURNEY_PROPERTY, STAGE } from "./journey";
 import { applyUpdate, advanceJourney } from "./record-writes";
@@ -49,9 +49,12 @@ export interface CampaignInput {
   description?: string | null;
   startDate?: string | null;
   endDate?: string | null;
-  /** Start from a company segment or a hand-picked selection */
+  /** COMPANY: everyone at each company / CONTACT: only the chosen people */
+  audience?: "COMPANY" | "CONTACT";
+  /** Start from a segment or a hand-picked selection */
   segmentId?: string | null;
   companyIds?: string[];
+  contactIds?: string[];
   criteria?: FilterGroup[];
 }
 
@@ -65,6 +68,7 @@ export async function createCampaign(input: CampaignInput): Promise<Result<{ id:
       data: {
         name: cleanName(input.name),
         type: input.type || "Custom set",
+        audience: input.audience === "CONTACT" ? "CONTACT" : "COMPANY",
         description: input.description?.trim() || null,
         startDate,
         endDate,
@@ -74,8 +78,10 @@ export async function createCampaign(input: CampaignInput): Promise<Result<{ id:
       },
     });
     let added = 0;
-    if (input.companyIds?.length) added += (await addMembers(c.id, input.companyIds, "manual", user.id)).length;
-    if (input.segmentId) added += (await addSegmentMembers(c.id, input.segmentId, user.id)).length;
+    if (c.audience === "CONTACT") {
+      if (input.contactIds?.length) added += (await addPeople(c.id, input.contactIds, "manual", user.id)).people;
+    } else if (input.companyIds?.length) added += (await addMembers(c.id, input.companyIds, "manual", user.id)).length;
+    if (input.segmentId) added += (await addSegmentMembers(c.id, input.segmentId, user.id)).added;
     await db.auditLog.create({ data: { action: "create_campaign", changes: json({ campaignId: c.id, name: c.name }), userId: user.id } });
     revalidate(c.id);
     return { ok: true, data: { id: c.id, added } };
@@ -162,6 +168,7 @@ export async function cloneCampaign(id: string): Promise<Result<{ id: string }>>
       data: {
         name: `${c.name} (copy)`.slice(0, 120),
         type: c.type,
+        audience: c.audience,
         description: c.description,
         criteria: json(c.criteria),
         settings: json(c.settings),
@@ -214,18 +221,90 @@ export async function syncCampaignNow(id: string): Promise<Result<{ added: numbe
   }
 }
 
-async function addSegmentMembers(campaignId: string, segmentId: string, userId: string) {
-  const seg = await db.segment.findUniqueOrThrow({ where: { id: segmentId } });
-  if (seg.objectType !== "COMPANY") throw new Error("Pick a company segment");
+/** What adding a segment did, worded for the toast. */
+interface SegmentAdd {
+  added: number;
+  skipped: number;
+  unit: "company" | "person";
+}
+
+async function addSegmentMembers(campaignId: string, segmentId: string, userId: string): Promise<SegmentAdd> {
+  const [seg, campaign] = await Promise.all([db.segment.findUniqueOrThrow({ where: { id: segmentId } }), db.campaign.findUniqueOrThrow({ where: { id: campaignId }, select: { audience: true } })]);
+  if (seg.objectType !== "COMPANY" && seg.objectType !== "CONTACT") throw new Error("Pick a company or contact segment");
   const ctx = await loadQueryContext(userId);
-  const ids = (await db.company.findMany({ where: segmentRecordsWhere("COMPANY", segmentId, ctx) as Prisma.CompanyWhereInput, select: { id: true }, take: 5000 })).map((r) => r.id);
-  return addMembers(campaignId, ids, "segment", userId);
+  // Contact campaigns target exactly the segment's people
+  if (campaign.audience === "CONTACT") {
+    if (seg.objectType !== "CONTACT") throw new Error("Contact campaigns take contact segments. Use a company campaign for company segments");
+    const ids = (await db.contact.findMany({ where: segmentRecordsWhere("CONTACT", segmentId, ctx) as Prisma.ContactWhereInput, select: { id: true } })).map((r) => r.id);
+    const res = await addPeople(campaignId, ids, "segment", userId);
+    return { added: res.people, skipped: res.skipped, unit: "person" };
+  }
+  // A contact segment brings in the companies those people work at
+  const where: Prisma.CompanyWhereInput =
+    seg.objectType === "COMPANY"
+      ? (segmentRecordsWhere("COMPANY", segmentId, ctx) as Prisma.CompanyWhereInput)
+      : { deletedAt: null, contacts: { some: { contact: segmentRecordsWhere("CONTACT", segmentId, ctx) as Prisma.ContactWhereInput } } };
+  // No cap: large segments come in whole
+  const ids = (await db.company.findMany({ where, select: { id: true } })).map((r) => r.id);
+  return { added: (await addMembers(campaignId, ids, "segment", userId)).length, skipped: 0, unit: "company" };
+}
+
+/** Add people to a Contact campaign (their companies join too). */
+export async function addPeopleToCampaign(id: string, contactIds: string[]): Promise<Result<{ added: number; companies: number; skipped: number; already: number }>> {
+  try {
+    const user = await requireUser();
+    const c = await editable(id, user.id);
+    if (c.audience !== "CONTACT") throw new Error("This is a company campaign. Add companies instead");
+    if (!contactIds.length) throw new Error("Select people first");
+    const res = await addPeople(id, contactIds, "manual", user.id);
+    revalidate(id);
+    return { ok: true, data: { added: res.people, companies: res.companies, skipped: res.skipped, already: res.already } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Take people out of a Contact campaign. A company left with nobody to call leaves the campaign too. */
+export async function removePeopleFromCampaign(id: string, contactIds: string[]): Promise<Result<{ companiesRemoved: number }>> {
+  try {
+    const user = await requireUser();
+    await editable(id, user.id);
+    const rows = await db.campaignContact.findMany({ where: { campaignId: id, contactId: { in: contactIds } }, select: { companyId: true } });
+    await db.campaignContact.updateMany({ where: { campaignId: id, contactId: { in: contactIds } }, data: { removedAt: new Date() } });
+    const companyIds = [...new Set(rows.map((r) => r.companyId))];
+    const left = await db.campaignContact.groupBy({ by: ["companyId"], where: { campaignId: id, companyId: { in: companyIds }, removedAt: null }, _count: { _all: true } });
+    const empty = companyIds.filter((cid) => !left.some((l) => l.companyId === cid));
+    if (empty.length) await removeFromCampaign(id, empty);
+    await syncCompaniesFromPeople(id, companyIds.filter((cid) => !empty.includes(cid)));
+    revalidate(id);
+    return { ok: true, data: { companiesRemoved: empty.length } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Put removed people back (undo). */
+export async function restorePeopleToCampaign(id: string, contactIds: string[]): Promise<Result> {
+  try {
+    const user = await requireUser();
+    await editable(id, user.id);
+    const rows = await db.campaignContact.findMany({ where: { campaignId: id, contactId: { in: contactIds } }, select: { companyId: true } });
+    await db.campaignContact.updateMany({ where: { campaignId: id, contactId: { in: contactIds } }, data: { removedAt: null } });
+    const companyIds = [...new Set(rows.map((r) => r.companyId))];
+    await restoreToCampaign(id, companyIds);
+    await syncCompaniesFromPeople(id, companyIds);
+    revalidate(id);
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
 }
 
 export async function addCompaniesToCampaign(id: string, companyIds: string[]): Promise<Result<{ added: number; addedIds: string[] }>> {
   try {
     const user = await requireUser();
-    await editable(id, user.id);
+    const c = await editable(id, user.id);
+    if (c.audience === "CONTACT") throw new Error("This is a contact campaign. Add people from the Contacts list instead");
     if (!companyIds.length) throw new Error("Select companies first");
     const addedIds = await addMembers(id, companyIds, "manual", user.id);
     revalidate(id);
@@ -235,13 +314,13 @@ export async function addCompaniesToCampaign(id: string, companyIds: string[]): 
   }
 }
 
-export async function addSegmentToCampaign(id: string, segmentId: string): Promise<Result<{ added: number }>> {
+export async function addSegmentToCampaign(id: string, segmentId: string): Promise<Result<SegmentAdd>> {
   try {
     const user = await requireUser();
     await editable(id, user.id);
-    const added = await addSegmentMembers(id, segmentId, user.id);
+    const res = await addSegmentMembers(id, segmentId, user.id);
     revalidate(id);
-    return { ok: true, data: { added: added.length } };
+    return { ok: true, data: res };
   } catch (e) {
     return fail(e);
   }
@@ -252,7 +331,10 @@ export async function removeFromCampaign(id: string, companyIds: string[]): Prom
   try {
     const user = await requireUser();
     const c = await editable(id, user.id);
-    await db.campaignCompany.updateMany({ where: { campaignId: id, companyId: { in: companyIds } }, data: { removedAt: new Date() } });
+    const now = new Date();
+    await db.campaignCompany.updateMany({ where: { campaignId: id, companyId: { in: companyIds } }, data: { removedAt: now } });
+    // Contact campaigns: the company's targeted people go with it
+    await db.campaignContact.updateMany({ where: { campaignId: id, companyId: { in: companyIds }, removedAt: null }, data: { removedAt: now } });
     // A company that was only "In campaign" because of this campaign goes back to where it was
     for (const companyId of companyIds) {
       const co = await db.company.findUnique({ where: { id: companyId }, select: { leadState: true } });
@@ -274,6 +356,11 @@ export async function restoreToCampaign(id: string, companyIds: string[]): Promi
   try {
     const user = await requireUser();
     const c = await editable(id, user.id);
+    // People removed together with their company come back with it (not ones taken out earlier on their own)
+    const members = await db.campaignCompany.findMany({ where: { campaignId: id, companyId: { in: companyIds }, removedAt: { not: null } }, select: { companyId: true, removedAt: true } });
+    for (const m of members) {
+      await db.campaignContact.updateMany({ where: { campaignId: id, companyId: m.companyId, removedAt: { gte: m.removedAt! } }, data: { removedAt: null } });
+    }
     await db.campaignCompany.updateMany({ where: { campaignId: id, companyId: { in: companyIds } }, data: { removedAt: null } });
     if (c.status === "ACTIVE") for (const companyId of companyIds) await advanceJourney(companyId, STAGE.inCampaign, user.id, { source: "campaign", campaignId: id });
     revalidate(id);
@@ -353,10 +440,10 @@ export async function snoozeMember(id: string, companyId: string, until: string 
   }
 }
 
-export async function searchCampaigns(q: string) {
+export async function searchCampaigns(q: string, audience: "COMPANY" | "CONTACT" = "COMPANY") {
   await requireUser();
   return db.campaign.findMany({
-    where: { status: { in: ["DRAFT", "ACTIVE", "PAUSED"] }, ...(q.trim() ? { name: { contains: q.trim(), mode: "insensitive" } } : {}) },
+    where: { status: { in: ["DRAFT", "ACTIVE", "PAUSED"] }, audience, ...(q.trim() ? { name: { contains: q.trim(), mode: "insensitive" } } : {}) },
     select: { id: true, name: true, status: true, type: true },
     orderBy: { updatedAt: "desc" },
     take: 20,

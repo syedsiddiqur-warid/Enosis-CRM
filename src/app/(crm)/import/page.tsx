@@ -8,15 +8,16 @@ import { db } from "@/lib/db";
 
 export const metadata = { title: "Import" };
 
-export default async function ImportPage({ searchParams }: { searchParams: Promise<{ object?: string }> }) {
+export default async function ImportPage({ searchParams }: { searchParams: Promise<{ object?: string; research?: string }> }) {
   const user = await currentUser();
   if (!user) redirect("/login");
-  const object: ImportObject = (await searchParams).object === "companies" ? "COMPANY" : "CONTACT";
+  const sp = await searchParams;
+  const object: ImportObject = sp.object === "companies" ? "COMPANY" : "CONTACT";
   const [defs, companyDefs, contactDefs, users, templates, outcomes] = await Promise.all([
     getPropDefs(object),
     getPropDefs("COMPANY"),
     getPropDefs("CONTACT"),
-    db.user.findMany({ where: { isActive: true }, select: { id: true, name: true, email: true }, orderBy: { name: "asc" } }),
+    db.user.findMany({ where: { isActive: true }, select: { id: true, name: true, email: true, role: { select: { name: true } } }, orderBy: { name: "asc" } }),
     db.importMappingTemplate.findMany({ where: { objectType: object }, orderBy: { name: "asc" } }),
     db.optionList.findUnique({ where: { key: "callResult" } }),
   ]);
@@ -26,7 +27,9 @@ export default async function ImportPage({ searchParams }: { searchParams: Promi
       object={object}
       targets={importTargets(object, defs, object === "CONTACT" ? companyDefs : contactDefs)}
       callOutcomes={((outcomes?.options as PropOption[] | null) ?? []).filter((o) => !o.archived).map((o) => o.value)}
-      users={users}
+      users={users.map((u) => ({ id: u.id, name: u.name, email: u.email }))}
+      researcherIds={users.filter((u) => u.role?.name === "Researcher").map((u) => u.id)}
+      fromResearch={sp.research === "1"}
       currentUserId={user.id}
       leadSources={companyDefs.find((d) => d.name === "source")?.options ?? []}
       templates={templates.map((t) => ({ id: t.id, name: t.name, mapping: t.mapping as Record<string, string> }))}

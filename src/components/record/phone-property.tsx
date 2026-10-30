@@ -325,6 +325,7 @@ export function PhoneProperty({ def, value, compact }: { def: PropDef; value: un
         )}
       </div>
 
+      {(primary || !extras.length) && (
       <PhonePopover
         open={open === "primary"}
         onOpenChange={(o) => setOpen(o ? "primary" : null)}
@@ -359,6 +360,7 @@ export function PhoneProperty({ def, value, compact }: { def: PropDef; value: un
           }
         />
       </PhonePopover>
+      )}
 
       {extras.map((row) => (
         <ExtraLine
@@ -374,7 +376,7 @@ export function PhoneProperty({ def, value, compact }: { def: PropDef; value: un
         />
       ))}
 
-      {multi && primary && (
+      {multi && (primary || extras.length > 0) && (
         <AddLine
           open={open === "new"}
           onOpenChange={(o) => setOpen(o ? "new" : null)}

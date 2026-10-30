@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarDays, ChevronDown, ChevronLeft, Copy, Mail, MoreHorizontal, NotebookPen, Pencil, Phone, Settings2, SquareCheckBig } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronLeft, Copy, Mail, MoreHorizontal, NotebookPen, Pencil, Phone, Settings2, SquareCheckBig, Star } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -26,7 +26,7 @@ import { cloneRecord, deleteRecord, getRecordHistory, setFollow, setKeyInfo, typ
 import type { QuickAction } from "@/lib/crm/record-types";
 import { colorFor, formatPhone, initials, phoneHref } from "@/lib/utils";
 import { useRecord } from "./record-context";
-import { PropertyRow, RecordCard, isShown } from "./record-ui";
+import { CARD_ACCENTS, PropertyRow, RecordCard, isShown } from "./record-ui";
 
 const QUICK_ACTIONS: Record<QuickAction, { label: string; icon: typeof Mail }> = {
   note: { label: "Note", icon: NotebookPen },
@@ -41,7 +41,7 @@ export function LeftColumn() {
   const { data } = useRecord();
   const defMap = new Map(data.defs.map((d) => [d.name, d]));
   return (
-    <aside className="thin-scroll min-h-0 overflow-y-auto rounded-[6px] border border-line bg-surface">
+    <aside className="thin-scroll min-h-0 space-y-3 overflow-y-auto pb-1">
       <HeaderCard />
       <KeyInfoCard />
       {data.layout.config.left.cards.map((card) => {
@@ -70,7 +70,7 @@ function HeaderCard() {
   const time = localTime(header.timeZone);
 
   return (
-    <div className="border-b border-line px-5 pb-5 pt-4">
+    <div className="rounded-[6px] border border-line bg-surface px-5 pb-5 pt-4 shadow-sm">
       <div className="mb-4 flex items-center justify-between">
         <Link href={labels.path} className="flex items-center gap-1 text-[13px] capitalize text-link hover:underline">
           <ChevronLeft className="size-4" /> {labels.plural}
@@ -370,6 +370,8 @@ function KeyInfoCard() {
     <RecordCard
       id="left:keyinfo"
       title={`Key information`}
+      icon={Star}
+      accent={CARD_ACCENTS.keyInfo}
       actions={
         <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
           <Tooltip content="Choose the properties shown here">

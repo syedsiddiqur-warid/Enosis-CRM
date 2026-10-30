@@ -54,7 +54,7 @@ import {
 } from "@/lib/crm/actions";
 import { AddToCampaignButton } from "@/components/campaigns/add-to-campaign";
 import { CreateTasksButton } from "@/components/tasks/create-tasks-button";
-import { removeFromCampaign } from "@/lib/crm/campaign-actions";
+import { removeFromCampaign, removePeopleFromCampaign } from "@/lib/crm/campaign-actions";
 import { OBJECT_LABELS } from "@/lib/crm/defaults";
 import type { IndexData } from "@/lib/crm/index-loader";
 import { createSegmentFromView, removeFromSegment } from "@/lib/crm/segment-actions";
@@ -380,14 +380,16 @@ export function IndexPage({ data }: { data: IndexData }) {
                   router.refresh();
                 }}
               />
-              {object === "COMPANY" && (
+              {(object === "COMPANY" || object === "CONTACT") && (
                 <AddToCampaignButton
+                  object={object}
                   ids={[...selected]}
                   types={data.campaignTypes}
                   segments={data.segments}
                   onDone={(message, campaignId, addedIds) => {
                     setSelected(new Set());
-                    const t: Toast = addedIds.length ? { message, undo: async () => void (await removeFromCampaign(campaignId, addedIds)) } : { message };
+                    const undo = object === "CONTACT" ? () => removePeopleFromCampaign(campaignId, addedIds) : () => removeFromCampaign(campaignId, addedIds);
+                    const t: Toast = addedIds.length ? { message, undo: async () => void (await undo()) } : { message };
                     setToast(t);
                     if (addedIds.length) setLastUndo(t);
                     router.refresh();

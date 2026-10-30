@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, ChevronLeft, Clock, ExternalLink, Pause, Phone, PhoneCall, Play, Timer, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronLeft, Clock, ExternalLink, FlaskConical, NotebookPen, Pause, Pencil, Phone, PhoneCall, Play, Plus, Timer, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
@@ -13,6 +13,7 @@ import { snoozeMember } from "@/lib/crm/campaign-actions";
 import { formatDate, friendlyDateTime, fromLocalInput, localTime } from "@/lib/crm/dates";
 import { logActivity } from "@/lib/crm/record-actions";
 import { cn, formatPhone } from "@/lib/utils";
+import { ContactDialog, EditCompanyDialog, NumberDialog, ResearchPanel, ResearchRequestDialog } from "./caller-tools";
 
 type Toast = { message: string };
 const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
@@ -38,6 +39,19 @@ export function CallingQueue({ data }: { data: QueueData }) {
   const [pending, startTransition] = useTransition();
   const [toast, setToast] = useState<Toast | null>(null);
   const [visited, setVisited] = useState<string[]>([]);
+  // Off by default: logging an outcome keeps the caller on the company to try its other people
+  const [autoNext, setAutoNextState] = useState(false);
+  useEffect(() => {
+    try {
+      setAutoNextState(localStorage.getItem("queue:autoNext") === "1");
+    } catch {}
+  }, []);
+  const setAutoNext = (v: boolean) => {
+    setAutoNextState(v);
+    try {
+      localStorage.setItem("queue:autoNext", v ? "1" : "0");
+    } catch {}
+  };
   const { queue, current } = data;
   const index = current ? queue.findIndex((q) => q.companyId === current.id) : -1;
   const ready = queue.filter((q) => q.bucket !== "scheduled").length;
@@ -134,15 +148,24 @@ export function CallingQueue({ data }: { data: QueueData }) {
             key={current.id}
             data={data}
             company={current}
-            onLogged={(message) => {
+            autoNext={autoNext}
+            onAutoNext={setAutoNext}
+            hasNext={!!nextId}
+            onLogged={(message, stay) => {
               setToast({ message });
-              if (nextId) moveTo(nextId);
+              // Stay on this company (pinned in the URL, since logging can reorder the queue) to try its other people
+              if (stay) go({ id: current.id });
+              else if (nextId) moveTo(nextId);
               else router.refresh();
             }}
             onSnoozed={(message) => {
               setToast({ message });
               if (nextId) moveTo(nextId);
               else router.refresh();
+            }}
+            onChanged={(message) => {
+              setToast({ message });
+              router.refresh();
             }}
             onSkip={() => nextId && moveTo(nextId)}
             onBack={back}
@@ -212,7 +235,13 @@ function QueueList({ data, onPick }: { data: QueueData; onPick: (id: string) => 
                 </span>
                 {q.lastResult && <span className="truncate">{q.lastResult}</span>}
               </div>
-              {q.nextActionAt && <div className={cn("text-[12px]", q.bucket === "due" ? "text-danger" : "text-ink-subtle")}>Next: {friendlyDateTime(q.nextActionAt)}</div>}
+              {q.researchBack ? (
+                <div className="text-[12px] font-medium text-[#00806e]">Research is back</div>
+              ) : q.researchOpen ? (
+                <div className="text-[12px] text-[#b07a1b]">Waiting on research</div>
+              ) : (
+                q.nextActionAt && <div className={cn("text-[12px]", q.bucket === "due" ? "text-danger" : "text-ink-subtle")}>Next: {friendlyDateTime(q.nextActionAt)}</div>
+              )}
             </button>
           </div>
         );
@@ -224,22 +253,41 @@ function QueueList({ data, onPick }: { data: QueueData; onPick: (id: string) => 
 function Session({
   data,
   company: c,
+  autoNext,
+  onAutoNext,
+  hasNext,
   onLogged,
   onSnoozed,
+  onChanged,
   onSkip,
   onBack,
 }: {
   data: QueueData;
   company: QueueCompany;
-  onLogged: (message: string) => void;
+  autoNext: boolean;
+  onAutoNext: (v: boolean) => void;
+  hasNext: boolean;
+  onLogged: (message: string, stay: boolean) => void;
   onSnoozed: (message: string) => void;
+  onChanged: (message: string) => void;
   onSkip: () => void;
   onBack: () => void;
 }) {
-  const callable = c.contacts.filter((x) => !x.doNotCall);
+  const forPeople = data.campaign.audience === "CONTACT";
+  // Contact campaigns: only the people on the campaign's list, minus those already finished
+  const callable = c.contacts.filter((x) => !x.doNotCall && (!forPeople || (x.target && !x.target.done)));
+  const listed = forPeople ? c.contacts.filter((x) => x.target) : c.contacts;
+  const others = forPeople ? c.contacts.filter((x) => !x.target) : [];
   const usablePhone = (contactId: string | null) =>
     c.phones.find((p) => p.contactId === contactId && !["Wrong", "Disconnected"].includes(p.status)) ?? c.phones.find((p) => !p.contactId && !["Wrong", "Disconnected"].includes(p.status));
-  const firstContact = callable.find((x) => x.labels.includes("Decision maker")) ?? callable[0] ?? null;
+  // Who was already called in this campaign in the last 12 hours (latest outcome each), so a reload doesn't lose track
+  const recent: Record<string, string> = {};
+  for (const a of c.calls) {
+    if (a.thisCampaign && Date.now() - new Date(a.at).getTime() < 12 * 36e5 && !((a.contactId ?? "") in recent)) recent[a.contactId ?? ""] = a.result ?? "Call";
+  }
+  const fresh = callable.filter((x) => !(x.id in recent));
+  // Start with a decision maker nobody has tried yet
+  const firstContact = fresh.find((x) => x.labels.includes("Decision maker")) ?? fresh[0] ?? callable.find((x) => x.labels.includes("Decision maker")) ?? callable[0] ?? null;
   const firstPhone = usablePhone(firstContact?.id ?? null);
 
   const [contactId, setContactId] = useState(firstContact?.id ?? "");
@@ -253,6 +301,22 @@ function Session({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [snoozeAt, setSnoozeAt] = useState("");
+  // Outcomes per person ("" = the company line): recent calls plus what was logged on this visit
+  const [triedNow, setTried] = useState<Record<string, string>>({});
+  const tried = { ...recent, ...triedNow };
+  const untried = callable.filter((x) => !(x.id in tried));
+  // Mid-call fix-ups and research requests
+  const [dialog, setDialog] = useState<
+    | { kind: "company" }
+    | { kind: "contact"; contact: QueueCompany["contacts"][number] | null }
+    | { kind: "number"; phone: QueueCompany["phones"][number] | null; extension?: boolean }
+    | { kind: "research"; contactId?: string | null }
+    | null
+  >(null);
+  const changed = (message: string) => {
+    setDialog(null);
+    onChanged(message);
+  };
 
   useEffect(() => {
     if (!running) return;
@@ -263,7 +327,8 @@ function Session({
   const contact = c.contacts.find((x) => x.id === contactId) ?? null;
   const phoneRow = phone.startsWith("id:") ? c.phones.find((p) => p.id === phone.slice(3)) : null;
   const hours = inBusinessHours(c.timeZone);
-  const maxed = !!data.campaign.maxAttempts && (c.member?.attempts ?? 0) >= data.campaign.maxAttempts;
+  // Contact campaigns count attempts per person: the company is "maxed" once every targeted person is done
+  const maxed = forPeople ? listed.length > 0 && listed.every((x) => x.target!.done) : !!data.campaign.maxAttempts && (c.member?.attempts ?? 0) >= data.campaign.maxAttempts;
   const journey = data.journeyOptions.find((o) => o.value === c.leadState);
 
   function dial(p: string, startTimer = true) {
@@ -272,6 +337,33 @@ function Session({
       setSeconds(0);
       setRunning(true);
     }
+  }
+
+  // Unsent notes survive moving to another company or a reload
+  const draftKey = `queue:note:${c.id}`;
+  useEffect(() => {
+    try {
+      const draft = localStorage.getItem(draftKey);
+      if (draft) setNotes(draft);
+    } catch {}
+  }, [draftKey]);
+  useEffect(() => {
+    try {
+      if (notes.trim()) localStorage.setItem(draftKey, notes);
+      else localStorage.removeItem(draftKey);
+    } catch {}
+  }, [draftKey, notes]);
+
+  /** A note without a call: what the caller learned, e.g. from the website or a colleague. */
+  async function saveNote() {
+    if (busy || !notes.trim()) return;
+    setBusy(true);
+    setError(null);
+    const res = await logActivity("COMPANY", c.id, { type: "NOTE", body: notes.trim(), occurredAt: new Date().toISOString() });
+    setBusy(false);
+    if (!res.ok) return setError(res.error);
+    setNotes("");
+    onChanged(`Note saved on ${c.name}`);
   }
 
   async function log(result: string) {
@@ -298,9 +390,33 @@ function Session({
     setBusy(false);
     if (!res.ok) return setError(res.error);
     const auto = res.data!.automations;
-    onLogged(
-      `${c.name}: ${result} logged${rule ? `, follow-up "${rule.taskTitle}" in ${rule.dueInDays} day${rule.dueInDays === 1 ? "" : "s"}` : ""}${auto.length ? `. ${auto.join(", ")}` : ""}`,
-    );
+    const who = contact?.name ?? c.name;
+    const message = `${who}: ${result} logged${rule ? `, follow-up "${rule.taskTitle}" in ${rule.dueInDays} day${rule.dueInDays === 1 ? "" : "s"}` : ""}${auto.length ? `. ${auto.join(", ")}` : ""}`;
+    // The note went with the call; drop the draft now, before the screen may move on
+    try {
+      localStorage.removeItem(draftKey);
+    } catch {}
+    if (autoNext) return onLogged(message, false);
+
+    // Stay here: get ready for the next person nobody has tried yet on this visit
+    const nowTried = { ...tried, [contactId]: result };
+    setTried(nowTried);
+    setNotes("");
+    setPath("");
+    setGatekeeper("");
+    setSeconds(0);
+    const next = callable.find((x) => !(x.id in nowTried));
+    if (next) {
+      setContactId(next.id);
+      // Their own line first, then the number on their contact record, then the company line
+      const own = c.phones.find((p) => p.contactId === next.id && !["Wrong", "Disconnected"].includes(p.status));
+      const raw = next.phone ?? next.mobile;
+      const line = usablePhone(null);
+      if (own) setPhone(`id:${own.id}`);
+      else if (raw) setPhone(`raw:${raw}`);
+      else if (line) setPhone(`id:${line.id}`);
+    }
+    onLogged(next ? `${message}. Next: ${next.name}` : `${message}. Everyone here has been tried`, true);
   }
 
   async function snooze(until: string, label: string) {
@@ -315,7 +431,7 @@ function Session({
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const el = e.target instanceof Element ? e.target : null;
-      if (el?.closest("input, textarea, select, [contenteditable]") || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (dialog || el?.closest("input, textarea, select, [contenteditable], [role=dialog]") || e.ctrlKey || e.metaKey || e.altKey) return;
       const i = KEYS.indexOf(e.key);
       if (i >= 0 && outcomes[i]) {
         e.preventDefault();
@@ -327,8 +443,87 @@ function Session({
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  const renderPerson = (x: QueueCompany["contacts"][number]) => (
+    <label
+      key={x.id}
+      className={cn(
+        "flex cursor-pointer items-start gap-2 rounded-[4px] border px-3 py-2 text-[13px]",
+        contactId === x.id ? "border-link bg-[#f0f9fb]" : "border-line hover:bg-surface-hover",
+        x.doNotCall && "cursor-not-allowed opacity-60",
+      )}
+    >
+      <input
+        type="radio"
+        name="target"
+        className="mt-1 accent-[var(--link)]"
+        disabled={x.doNotCall}
+        checked={contactId === x.id}
+        onChange={() => {
+          setContactId(x.id);
+          const p = usablePhone(x.id);
+          if (p?.contactId === x.id) setPhone(`id:${p.id}`);
+        }}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="flex flex-wrap items-center gap-1.5">
+          <Link href={`/contacts/${x.id}`} target="_blank" className="font-medium hover:underline">
+            {x.name}
+          </Link>
+          {x.labels.map((l) => (
+            <Pill key={l} label={l} />
+          ))}
+          {x.inDbnd?.toLowerCase() === "yes" && <Pill label="In DBND" color="#00a4bd" />}
+          {x.doNotCall && <Pill label="Do not call" color="#f2545b" />}
+          {x.id in tried && <Pill label={`Tried: ${tried[x.id]}`} color="#00bda5" />}
+          {x.target && (
+            <Pill
+              label={x.target.done ? `Done: ${x.target.status}` : `${x.target.attempts}${data.campaign.maxAttempts ? ` of ${data.campaign.maxAttempts}` : ""} calls`}
+              color={x.target.done ? "#99afc4" : "#6a78d1"}
+            />
+          )}
+        </span>
+        <span className="block text-[12px] text-ink-muted">{[x.jobTitle, x.email].filter(Boolean).join(" · ")}</span>
+        <span className="block text-[12px] text-ink-subtle">
+          CRT {x.crtCount} · {x.callStatus ?? "Never called"}
+          {x.leadStatus ? ` · ${x.leadStatus}` : ""}
+        </span>
+        {[x.phone, x.mobile].filter(Boolean).map((n) => (
+          <a key={n} href={`tel:${n}`} onClick={() => (setContactId(x.id), dial(`raw:${n}`))} className="mr-3 text-[12px] text-link hover:underline">
+            <Phone className="mr-0.5 inline size-3" />
+            {formatPhone(n)}
+          </a>
+        ))}
+        <span className="mt-1 flex gap-3 text-[12px]">
+          <button type="button" className="text-link hover:underline" onClick={(e) => (e.preventDefault(), setDialog({ kind: "contact", contact: x }))}>
+            Correct info
+          </button>
+          <button type="button" className="text-link hover:underline" onClick={(e) => (e.preventDefault(), setDialog({ kind: "research", contactId: x.id }))}>
+            Ask research
+          </button>
+        </span>
+      </span>
+    </label>
+  );
+
   return (
     <>
+      {dialog?.kind === "company" && <EditCompanyDialog company={c} onClose={() => setDialog(null)} onDone={changed} />}
+      {dialog?.kind === "contact" && <ContactDialog companyId={c.id} contact={dialog.contact} onClose={() => setDialog(null)} onDone={changed} />}
+      {dialog?.kind === "number" && <NumberDialog data={data} company={c} phone={dialog.phone} focusExtension={dialog.extension} onClose={() => setDialog(null)} onDone={changed} />}
+      {dialog?.kind === "research" && (
+        <ResearchRequestDialog
+          data={data}
+          company={c}
+          contactId={dialog.contactId}
+          onClose={() => setDialog(null)}
+          onDone={(message, held) => {
+            setDialog(null);
+            // A held company leaves the queue for now, so move on to the next one
+            if (held) onSnoozed(message);
+            else onChanged(message);
+          }}
+        />
+      )}
       {/* Company, targets, numbers, past attempts */}
       <div className="thin-scroll min-h-0 space-y-4 overflow-y-auto px-5 py-4">
         <header className="flex flex-wrap items-start gap-3">
@@ -353,6 +548,14 @@ function Session({
               </span>
               {c.member?.nextActionAt && <span className="text-ink-muted">· next action {friendlyDateTime(c.member.nextActionAt)}</span>}
             </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <Button size="sm" variant="secondary" onClick={() => setDialog({ kind: "company" })}>
+                <Pencil /> Correct company info
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => setDialog({ kind: "research" })}>
+                <FlaskConical /> Ask research
+              </Button>
+            </div>
           </div>
           <div className={cn("rounded-[6px] border px-3 py-2 text-right", hours === false ? "border-line bg-surface-muted" : "border-[#00bda5] bg-[#e5f8f6]")}>
             <div className="text-[20px] font-medium tabular-nums">{localTime(c.timeZone) ?? "--:--"}</div>
@@ -362,7 +565,9 @@ function Session({
 
         {maxed && (
           <p className="rounded-[4px] bg-[#fdf3e1] px-3 py-2 text-[13px]">
-            This company has reached the campaign&apos;s {data.campaign.maxAttempts} attempts. Consider Nurture or Not interested on the campaign page, or snooze it.
+            {forPeople
+              ? "Everyone on the list at this company is done (final outcome or out of attempts). Move on to the next company."
+              : `This company has reached the campaign's ${data.campaign.maxAttempts} attempts. Consider Nurture or Not interested on the campaign page, or snooze it.`}
           </p>
         )}
 
@@ -397,62 +602,46 @@ function Session({
           </section>
         )}
 
+        <ResearchPanel company={c} onAsk={() => setDialog({ kind: "research" })} onChanged={changed} />
+
+
         <section className="grid gap-4 2xl:grid-cols-2">
           <div>
-            <h2 className="mb-2 text-[14px] font-semibold">Targets ({c.contacts.length})</h2>
+            <div className="mb-2 flex items-center">
+              <h2 className="flex-1 text-[14px] font-semibold">{forPeople ? `Campaign targets (${listed.length})` : `Targets (${c.contacts.length})`}</h2>
+              <Button size="sm" variant="ghost" className="text-link" onClick={() => setDialog({ kind: "contact", contact: null })}>
+                <Plus /> Add person
+              </Button>
+            </div>
             <div className="space-y-1.5">
-              {c.contacts.map((x) => (
-                <label
-                  key={x.id}
-                  className={cn(
-                    "flex cursor-pointer items-start gap-2 rounded-[4px] border px-3 py-2 text-[13px]",
-                    contactId === x.id ? "border-link bg-[#f0f9fb]" : "border-line hover:bg-surface-hover",
-                    x.doNotCall && "cursor-not-allowed opacity-60",
-                  )}
-                >
-                  <input
-                    type="radio"
-                    name="target"
-                    className="mt-1 accent-[var(--link)]"
-                    disabled={x.doNotCall}
-                    checked={contactId === x.id}
-                    onChange={() => {
-                      setContactId(x.id);
-                      const p = usablePhone(x.id);
-                      if (p?.contactId === x.id) setPhone(`id:${p.id}`);
-                    }}
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex flex-wrap items-center gap-1.5">
-                      <Link href={`/contacts/${x.id}`} target="_blank" className="font-medium hover:underline">
-                        {x.name}
-                      </Link>
-                      {x.labels.map((l) => (
-                        <Pill key={l} label={l} />
-                      ))}
-                      {x.inDbnd?.toLowerCase() === "yes" && <Pill label="In DBND" color="#00a4bd" />}
-                      {x.doNotCall && <Pill label="Do not call" color="#f2545b" />}
-                    </span>
-                    <span className="block text-[12px] text-ink-muted">{[x.jobTitle, x.email].filter(Boolean).join(" · ")}</span>
-                    <span className="block text-[12px] text-ink-subtle">
-                      CRT {x.crtCount} · {x.callStatus ?? "Never called"}
-                      {x.leadStatus ? ` · ${x.leadStatus}` : ""}
-                    </span>
-                    {[x.phone, x.mobile].filter(Boolean).map((n) => (
-                      <a key={n} href={`tel:${n}`} onClick={() => (setContactId(x.id), dial(`raw:${n}`))} className="mr-3 text-[12px] text-link hover:underline">
-                        <Phone className="mr-0.5 inline size-3" />
-                        {formatPhone(n)}
-                      </a>
-                    ))}
-                  </span>
-                </label>
-              ))}
+              {listed.map(renderPerson)}
+              {!listed.length && (
+                <p className="text-[13px] text-ink-subtle">{forPeople ? "Nobody at this company is on the campaign's list." : "No targets yet. Calls are logged against the company line."}</p>
+              )}
+              {c.movedTargets > 0 && (
+                <p className="text-[12px] text-ink-subtle">
+                  {c.movedTargets} targeted {c.movedTargets === 1 ? "person is" : "people are"} no longer linked to this company. Remove them on the campaign&apos;s People tab.
+                </p>
+              )}
+              {others.length > 0 && (
+                <details className="rounded-[4px] border border-dashed border-line px-3 py-2 text-[13px]">
+                  <summary className="cursor-pointer text-ink-muted">
+                    Other people at this company ({others.length}): not on this campaign&apos;s list
+                  </summary>
+                  <div className="mt-2 space-y-1.5">{others.map(renderPerson)}</div>
+                </details>
+              )}
               {!c.contacts.length && <p className="text-[13px] text-ink-subtle">No targets yet. Calls are logged against the company line.</p>}
             </div>
           </div>
 
           <div>
-            <h2 className="mb-2 text-[14px] font-semibold">Numbers ({c.phones.length})</h2>
+            <div className="mb-2 flex items-center">
+              <h2 className="flex-1 text-[14px] font-semibold">Numbers ({c.phones.length})</h2>
+              <Button size="sm" variant="ghost" className="text-link" onClick={() => setDialog({ kind: "number", phone: null })}>
+                <Plus /> Add number
+              </Button>
+            </div>
             <div className="space-y-1.5">
               {c.phones.map((p) => {
                 const dead = ["Wrong", "Disconnected"].includes(p.status);
@@ -474,6 +663,16 @@ function Session({
                         {p.lastDialedAt ? ` · last dialed ${friendlyDateTime(p.lastDialedAt)}` : " · never dialed"}
                       </div>
                       {p.notes && <div className="text-[12px] text-ink-muted">{p.notes}</div>}
+                      <div className="mt-0.5 flex gap-3 text-[12px]">
+                        {!p.extension && (
+                          <button className="text-link hover:underline" onClick={() => setDialog({ kind: "number", phone: p, extension: true })}>
+                            Add extension
+                          </button>
+                        )}
+                        <button className="text-link hover:underline" onClick={() => setDialog({ kind: "number", phone: p })}>
+                          Correct number
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -483,33 +682,37 @@ function Session({
                   {formatPhone(c.phone)} <span className="text-ink-subtle">(company phone)</span>
                 </a>
               )}
-              {!c.phones.length && !c.phone && <p className="text-[13px] text-ink-subtle">No numbers yet. Add them on the company record.</p>}
+              {!c.phones.length && !c.phone && <p className="text-[13px] text-ink-subtle">No numbers yet. Add one, or ask research to find them.</p>}
             </div>
           </div>
         </section>
 
         <section>
-          <h2 className="mb-2 text-[14px] font-semibold">Past attempts ({c.calls.length})</h2>
+          <h2 className="mb-2 text-[14px] font-semibold">
+            Past attempts ({c.calls.length}){c.notes.length > 0 && <span className="font-normal text-ink-muted"> · {c.notes.length} note{c.notes.length === 1 ? "" : "s"}</span>}
+          </h2>
           <ol className="space-y-2 border-l-2 border-line pl-3">
-            {c.calls.map((a) => (
-              <li key={a.id} className="relative text-[13px]">
-                <span className={cn("absolute -left-[17px] top-1.5 size-2 rounded-full", /^connected|meeting/i.test(a.result ?? "") ? "bg-[#00bda5]" : "bg-[#cbd6e2]")} />
-                <div className="flex flex-wrap items-center gap-x-2">
-                  <span className="font-medium">{a.result ?? "Call"}</span>
-                  {a.path && <span className="text-[12px] text-ink-muted">via {a.path}</span>}
-                  {a.gatekeeperType && <span className="text-[12px] text-ink-muted">({a.gatekeeperType})</span>}
-                  {a.campaign && <Pill label={a.thisCampaign ? "This campaign" : a.campaign.name} color={a.thisCampaign ? "#00a4bd" : undefined} />}
-                </div>
-                <div className="text-[12px] text-ink-subtle">
-                  {friendlyDateTime(a.at)}
-                  {a.contact ? ` · ${a.contact}` : ""}
-                  {a.number ? ` · ${formatPhone(a.number)}` : ""}
-                  {a.durationSec ? ` · ${duration(a.durationSec)}` : ""}
-                  {a.by ? ` · ${a.by}` : ""}
-                </div>
-                {a.body && <p className="whitespace-pre-line text-ink-muted">{a.body.replace(/<[^>]+>/g, "")}</p>}
-              </li>
-            ))}
+            {/* Calls and standalone notes in one timeline, newest first */}
+            {[...c.calls.map((call) => ({ at: call.at, call, note: null })), ...c.notes.map((note) => ({ at: note.at, call: null, note }))]
+              .sort((x, y) => y.at.localeCompare(x.at))
+              .map(({ call, note: a }) =>
+                a ? (
+                  <li key={a.id} className="relative text-[13px]">
+                    <span className="absolute -left-[17px] top-1.5 size-2 rounded-full bg-[#f5c26b]" />
+                    <div className="flex flex-wrap items-center gap-x-2">
+                      <NotebookPen className="size-3.5 text-[#b07a1b]" />
+                      <span className="font-medium">Note</span>
+                    </div>
+                    <div className="text-[12px] text-ink-subtle">
+                      {friendlyDateTime(a.at)}
+                      {a.by ? ` · ${a.by}` : ""}
+                    </div>
+                    {a.body && <p className="whitespace-pre-line text-ink">{a.body.replace(/<[^>]+>/g, "")}</p>}
+                  </li>
+                ) : (
+                  <CallItem key={call!.id} a={call!} />
+                ),
+              )}
             {!c.calls.length && <li className="text-[13px] text-ink-subtle">First call to this company.</li>}
           </ol>
         </section>
@@ -568,24 +771,59 @@ function Session({
             ))}
           </Select>
         </div>
-        <textarea
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          rows={3}
-          placeholder="Call notes: who answered, what they said, next steps"
-          aria-label="Call notes"
-          className="w-full rounded-[3px] border border-line-strong bg-surface px-2.5 py-2 text-[13px] focus:border-link focus:outline-none"
-        />
+        <div>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={3}
+            placeholder="Call notes: who answered, what they said, next steps"
+            aria-label="Call notes"
+            className="w-full rounded-[3px] border border-line-strong bg-surface px-2.5 py-2 text-[13px] focus:border-link focus:outline-none"
+          />
+          <div className="flex items-start gap-2">
+            <p className="flex-1 text-[11px] text-ink-subtle">
+              {notes.trim()
+                ? "Saved with the call when you click an outcome below. Your draft is kept if you leave this company."
+                : "Notes are saved with the call outcome and shown under Past attempts and on the company's timeline."}
+            </p>
+            <Button size="sm" variant="secondary" disabled={!notes.trim() || busy} onClick={() => void saveNote()}>
+              Save note only
+            </Button>
+          </div>
+        </div>
         <label className="flex cursor-pointer items-center gap-2 text-[13px]">
           <input type="checkbox" className="accent-[var(--link)]" checked={followUp} onChange={(e) => setFollowUp(e.target.checked)} />
           Create follow-up tasks from the follow-up rules
         </label>
+        <label className="flex cursor-pointer items-center gap-2 text-[13px]">
+          <input type="checkbox" className="accent-[var(--link)]" checked={autoNext} onChange={(e) => onAutoNext(e.target.checked)} />
+          Go to the next company after each outcome
+        </label>
+
+        {/* Progress through this company's people, and the way on when done */}
+        {!autoNext && (Object.keys(tried).length > 0 || callable.length > 1) && (
+          <div className={cn("rounded-[4px] border px-3 py-2.5 text-[13px]", Object.keys(tried).length && !untried.length ? "border-[#00bda5] bg-[#e5f8f6]" : "border-line bg-surface")}>
+            <div className="mb-1.5">
+              {callable.length ? (
+                <>
+                  Tried <strong>{callable.length - untried.length}</strong> of {callable.length} people at {c.name}
+                  {untried.length ? ` · still to try: ${untried.map((x) => x.name).join(", ")}` : ". Everyone has been tried."}
+                </>
+              ) : (
+                <>{forPeople ? "Everyone on the list here is done." : `Company line tried${"" in tried ? `: ${tried[""]}` : ""}`}</>
+              )}
+            </div>
+            <Button size="sm" variant={Object.keys(tried).length && !untried.length ? "primary" : "secondary"} className="w-full justify-center" disabled={!hasNext} onClick={onSkip}>
+              Next company <ArrowRight />
+            </Button>
+          </div>
+        )}
 
         {error && <p className="rounded-[3px] bg-danger-soft px-3 py-2 text-[13px] text-danger">{error}</p>}
 
         <div>
           <div className="mb-1.5 flex items-center justify-between text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">
-            Outcome: one click logs it and moves on
+            {autoNext ? "Outcome: one click logs it and moves on" : "Outcome: one click logs it, then the next person"}
           </div>
           <div className="grid grid-cols-2 gap-1.5">
             {outcomes.map((o, i) => {
@@ -628,9 +866,32 @@ function Session({
         </div>
 
         <p className="text-[11px] text-ink-subtle">
-          Keys: 1–9, 0 log an outcome · → skip · ← previous. Clicking a number starts the call timer.
+          Keys: 1–9, 0 log an outcome · → next company · ← previous. Clicking a number starts the call timer.
         </p>
       </aside>
     </>
+  );
+}
+
+/** One logged call in the Past attempts timeline, with its note. */
+function CallItem({ a }: { a: QueueCompany["calls"][number] }) {
+  return (
+    <li className="relative text-[13px]">
+      <span className={cn("absolute -left-[17px] top-1.5 size-2 rounded-full", /^connected|meeting/i.test(a.result ?? "") ? "bg-[#00bda5]" : "bg-[#cbd6e2]")} />
+      <div className="flex flex-wrap items-center gap-x-2">
+        <span className="font-medium">{a.result ?? "Call"}</span>
+        {a.path && <span className="text-[12px] text-ink-muted">via {a.path}</span>}
+        {a.gatekeeperType && <span className="text-[12px] text-ink-muted">({a.gatekeeperType})</span>}
+        {a.campaign && <Pill label={a.thisCampaign ? "This campaign" : a.campaign.name} color={a.thisCampaign ? "#00a4bd" : undefined} />}
+      </div>
+      <div className="text-[12px] text-ink-subtle">
+        {friendlyDateTime(a.at)}
+        {a.contact ? ` · ${a.contact}` : ""}
+        {a.number ? ` · ${formatPhone(a.number)}` : ""}
+        {a.durationSec ? ` · ${duration(a.durationSec)}` : ""}
+        {a.by ? ` · ${a.by}` : ""}
+      </div>
+      {a.body && <p className="whitespace-pre-line text-ink">{a.body.replace(/<[^>]+>/g, "")}</p>}
+    </li>
   );
 }

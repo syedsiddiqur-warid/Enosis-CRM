@@ -118,6 +118,8 @@ export function ImportWizard({
   leadSources,
   templates,
   callOutcomes,
+  researcherIds = [],
+  fromResearch = false,
 }: {
   object: ImportObject;
   targets: ImportTargetOption[];
@@ -127,6 +129,10 @@ export function ImportWizard({
   templates: { id: string; name: string; mapping: Record<string, string> }[];
   /** Call outcome values the Caller Notes parser maps results to */
   callOutcomes: string[];
+  /** People with the Researcher role (offered first for research queue assignment) */
+  researcherIds?: string[];
+  /** Opened from the Research Queue */
+  fromResearch?: boolean;
 }) {
   const router = useRouter();
   const plural = object === "CONTACT" ? "contacts" : "companies";
@@ -318,6 +324,11 @@ export function ImportWizard({
     <div className="thin-scroll h-full overflow-y-auto rounded-[6px] border border-line bg-surface px-6 py-5">
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-[22px] font-medium">Import {plural}</h1>
+        {fromResearch && (
+          <Link href="/research" className="text-[13px] text-link hover:underline">
+            ← Research Queue
+          </Link>
+        )}
         <div className="flex rounded-[4px] border border-line text-[13px]">
           {(["contacts", "companies"] as const).map((o) => (
             <Link
@@ -528,6 +539,38 @@ export function ImportWizard({
                 </span>
               </label>
             </section>
+            {object === "COMPANY" && (
+              <section className={cn("space-y-2 rounded-[4px] border p-4 text-[13px]", fromResearch ? "border-[#6a78d1] bg-[#f4f5fd]" : "border-line")}>
+                <h2 className="text-[14px] font-semibold">Research Queue</h2>
+                <p className="text-ink-muted">
+                  New companies land on the Research Queue as <em>Sourced</em>, ready to research. Tick one researcher to give them all to that person, or several to spread them evenly (matched companies without
+                  a researcher are assigned too).
+                </p>
+                <div className="thin-scroll flex max-h-[140px] flex-wrap gap-x-4 gap-y-1.5 overflow-y-auto">
+                  {[...users.filter((u) => researcherIds.includes(u.id)), ...users.filter((u) => !researcherIds.includes(u.id))].map((u) => (
+                    <label key={u.id} className="flex cursor-pointer items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        className="accent-[var(--link)]"
+                        checked={options.researcherIds?.includes(u.id) ?? false}
+                        onChange={(e) =>
+                          setOptions({ ...options, researcherIds: e.target.checked ? [...(options.researcherIds ?? []), u.id] : (options.researcherIds ?? []).filter((x) => x !== u.id) })
+                        }
+                      />
+                      {u.name ?? u.email}
+                      {researcherIds.includes(u.id) && <span className="text-[12px] text-ink-subtle">(researcher)</span>}
+                    </label>
+                  ))}
+                </div>
+                <p className="text-[12px] text-ink-subtle">
+                  {options.researcherIds?.length
+                    ? options.researcherIds.length === 1
+                      ? "Every new company goes to this researcher."
+                      : `Spread across ${options.researcherIds.length} researchers${sheet ? `, about ${Math.ceil(sheet.rows.length / options.researcherIds.length).toLocaleString()} each` : ""}.`
+                    : "No researcher: companies wait unassigned, and anyone can pick them up from the queue."}
+                </p>
+              </section>
+            )}
           </div>
 
           <section className="flex flex-wrap items-end gap-2 rounded-[4px] border border-line p-4 text-[13px]">
@@ -641,6 +684,11 @@ export function ImportWizard({
             <Button variant="secondary" asChild>
               <Link href={object === "CONTACT" ? "/contacts" : "/companies"}>Go to {plural}</Link>
             </Button>
+            {object === "COMPANY" && (
+              <Button variant="secondary" asChild>
+                <Link href="/research?view=list">Open the Research Queue</Link>
+              </Button>
+            )}
             <Button variant="ghost" onClick={() => (setStep("upload"), setSheet(null), setReview(null), setResult(null))}>
               Import another file
             </Button>
