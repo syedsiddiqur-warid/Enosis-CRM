@@ -8,6 +8,8 @@ import { fullName } from "@/lib/utils";
 import { bulkDelete } from "./actions";
 import { runActivityRules } from "./automation";
 import { syncCompaniesFromPeople } from "./campaigns";
+import { FEEDBACK_RATINGS, FEEDBACK_TAGS } from "./follow-up";
+import { rescoreCompanies } from "./follow-score";
 import { OBJECT_LABELS } from "./defaults";
 import { STAGE, memberStatusForCall, nextCallStatus, phoneStatusForCall, stageForCall } from "./journey";
 import { advanceJourney } from "./record-writes";
@@ -36,6 +38,15 @@ const emails = (list: string[] | undefined) => (list ?? []).map((e) => e.trim())
 
 async function roleName(userId: string) {
   return (await db.user.findUnique({ where: { id: userId }, select: { role: { select: { name: true } } } }))?.role?.name ?? null;
+}
+
+/** Caller feedback on a call: rating, what was learned, when to ask again. */
+function feedbackFields(input: ActivityInput) {
+  const rating = input.feedbackRating && FEEDBACK_RATINGS.some((r) => r.value === input.feedbackRating) ? input.feedbackRating : null;
+  const tags = (input.feedbackTags ?? []).filter((t) => FEEDBACK_TAGS.some((x) => x.key === t));
+  const revisitAt = date(input.revisitAt);
+  if (revisitAt && revisitAt.getTime() < Date.now() - 864e5) throw new Error("The revisit date is in the past");
+  return { feedbackRating: rating, feedbackTags: tags, revisitAt };
 }
 
 /** Fields for one activity type, validated. Shared by create and edit. */
@@ -67,6 +78,7 @@ function activityFields(input: ActivityInput): Prisma.ActivityUncheckedCreateInp
         dialedNumber: text(input.dialedNumber),
         phoneNumberId: input.phoneNumberId || null,
         targetContactId: input.targetContactId || null,
+        ...feedbackFields(input),
       };
     case "TASK": {
       if (!text(input.title)) throw new Error("Give the task a title");
@@ -242,6 +254,14 @@ export async function logActivity(object: CrmObject, recordId: string, input: Ac
       await db.company.updateMany({ where: { id: { in: companyIds } }, data: { lastContactedAt: at } });
       if (!isCall) await db.contact.updateMany({ where: { id: { in: contactIds } }, data: { lastContactedAt: at } });
     }
+    // "Not now": the company rests until the revisit date, then comes back up in the calling queue
+    const revisit = isCall ? (fields.revisitAt as Date | null | undefined) : null;
+    if (revisit) {
+      await db.company.updateMany({ where: { id: { in: companyIds } }, data: { revisitAt: revisit } });
+      if (campaignId) await db.campaignCompany.updateMany({ where: { campaignId, companyId: { in: companyIds }, removedAt: null }, data: { nextActionAt: revisit } });
+    }
+    // Calls and caller feedback decide who to chase, nurture or drop
+    if (isCall) await rescoreCompanies(companyIds);
 
     if (input.followUp) {
       await db.activity.create({
@@ -287,11 +307,18 @@ export async function updateActivity(object: CrmObject, recordId: string, id: st
     }
     if (input.type === "TASK" && !fields.assigneeId) fields.assigneeId = a.assigneeId;
     await db.activity.update({ where: { id }, data: fields as Prisma.ActivityUncheckedUpdateInput });
+    if (a.type === "CALL") await rescoreActivityCompanies(id);
     revalidate(object, recordId);
     return { ok: true };
   } catch (e) {
     return fail(e);
   }
+}
+
+/** A call was edited, deleted or restored: its companies' follow-up scores change with it. */
+async function rescoreActivityCompanies(activityId: string) {
+  const links = await db.activityCompany.findMany({ where: { activityId }, select: { companyId: true } });
+  await rescoreCompanies(links.map((l) => l.companyId));
 }
 
 /** Undo or redo a call's contribution to the CRT/connected counts (contact, companies, campaign membership). */
@@ -324,6 +351,7 @@ export async function deleteActivity(object: CrmObject, recordId: string, id: st
     const a = await editableActivity(id, user.id);
     await db.activity.update({ where: { id }, data: { deletedAt: new Date() } });
     if (a.type === "CALL") await adjustCallCounts(a, -1);
+    if (a.type === "CALL") await rescoreActivityCompanies(id);
     await db.auditLog.create({ data: { objectType: object, recordId, action: "delete_activity", changes: json({ activityId: id, type: a.type }), userId: user.id } });
     revalidate(object, recordId);
     return { ok: true };
@@ -338,6 +366,7 @@ export async function restoreActivity(object: CrmObject, recordId: string, id: s
     const a = await editableActivity(id, user.id);
     await db.activity.update({ where: { id }, data: { deletedAt: null } });
     if (a.type === "CALL") await adjustCallCounts(a, 1);
+    if (a.type === "CALL") await rescoreActivityCompanies(id);
     revalidate(object, recordId);
     return { ok: true };
   } catch (e) {

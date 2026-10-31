@@ -15,7 +15,13 @@ Netlify's Linux servers, `npm run build:netlify` (applies database migrations, t
 
 ## 1. Create the database (Neon)
 
-Either:
+**Easiest: Netlify Database.** In the Netlify project, open **Database** and create one. Netlify provides the
+connection as `NETLIFY_DB_URL`; the build and the app use it
+automatically when `DATABASE_URL` isn't set, and the first build on the empty database sets up the workspace
+(admin `siddiqur.rahim@enosisbd.com`, roles, properties, lists, layouts; no sample data), so step 4 is not needed.
+Skip to step 2.
+
+Or bring your own Neon database:
 
 - **In Netlify:** *Site configuration → Extensions → Neon* (Netlify DB), or
 - **At [neon.tech](https://neon.tech):** create a project. Pick the region closest to your Netlify functions

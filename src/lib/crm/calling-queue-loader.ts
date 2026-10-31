@@ -101,7 +101,7 @@ export async function loadQueue(campaignId: string, userId: string, sp: QueueSea
       nextActionAt: true,
       addedAt: true,
       assignedTo: { select: { id: true, name: true } },
-      company: { select: { name: true, domain: true, timeZone: true, leadState: true } },
+      company: { select: { name: true, domain: true, timeZone: true, leadState: true, followScore: true, followGroup: true } },
     },
   });
   // Research the callers asked for: still open, or sent back and not read yet
@@ -117,6 +117,8 @@ export async function loadQueue(campaignId: string, userId: string, sp: QueueSea
       domain: m.company.domain,
       timeZone: m.company.timeZone,
       leadState: m.company.leadState,
+      followScore: m.company.followScore,
+      followGroup: m.company.followGroup,
       status: m.status,
       attempts: m.attempts,
       connects: m.connects,
@@ -173,7 +175,28 @@ async function loadCompany(companyId: string, campaignId: string, maxAttempts: n
   const [company, links, phones, calls, tasks, signals, member, research, notes, targets] = await Promise.all([
     db.company.findUniqueOrThrow({
       where: { id: companyId },
-      select: { id: true, name: true, domain: true, phone: true, linkedinUrl: true, timeZone: true, city: true, state: true, country: true, industry: true, employees: true, description: true, pitchNotes: true, leadState: true, callStatus: true, crtCount: true },
+      select: {
+        id: true,
+        name: true,
+        domain: true,
+        phone: true,
+        linkedinUrl: true,
+        timeZone: true,
+        city: true,
+        state: true,
+        country: true,
+        industry: true,
+        employees: true,
+        description: true,
+        pitchNotes: true,
+        leadState: true,
+        callStatus: true,
+        crtCount: true,
+        followScore: true,
+        followGroup: true,
+        followReason: true,
+        revisitAt: true,
+      },
     }),
     db.contactCompany.findMany({
       where: { companyId, contact: { deletedAt: null } },
@@ -227,6 +250,7 @@ async function loadCompany(companyId: string, campaignId: string, maxAttempts: n
 
   return {
     ...company,
+    revisitAt: iso(company.revisitAt),
     contacts: links.map((l) => ({
       id: l.contact.id,
       name: fullName(l.contact),
@@ -268,6 +292,9 @@ async function loadCompany(companyId: string, campaignId: string, maxAttempts: n
       path: a.callPath,
       gatekeeperType: a.gatekeeperType,
       number: a.dialedNumber,
+      feedbackRating: a.feedbackRating,
+      feedbackTags: a.feedbackTags,
+      revisitAt: iso(a.revisitAt),
       durationSec: a.durationSec,
       body: a.body,
       contact: a.targetContact ? fullName(a.targetContact) : null,

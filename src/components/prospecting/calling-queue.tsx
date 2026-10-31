@@ -11,6 +11,7 @@ import { BUCKET_LABEL, inBusinessHours, nextLocalMorning } from "@/lib/crm/calli
 import type { QueueCompany, QueueData } from "@/lib/crm/calling-queue-loader";
 import { snoozeMember } from "@/lib/crm/campaign-actions";
 import { formatDate, friendlyDateTime, fromLocalInput, localTime } from "@/lib/crm/dates";
+import { CONVERSATION_OUTCOMES, FEEDBACK_RATINGS, FEEDBACK_TAGS, FOLLOW_GROUP_INFO, type FollowGroup } from "@/lib/crm/follow-up";
 import { logActivity } from "@/lib/crm/record-actions";
 import { cn, formatPhone } from "@/lib/utils";
 import { ContactDialog, EditCompanyDialog, NumberDialog, ResearchPanel, ResearchRequestDialog } from "./caller-tools";
@@ -222,6 +223,13 @@ function QueueList({ data, onPick }: { data: QueueData; onPick: (id: string) => 
             >
               <div className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate font-medium">{q.name}</span>
+                {q.followGroup && (
+                  <Tooltip content={`${q.followGroup} · follow-up score ${q.followScore}`}>
+                    <span className="shrink-0 rounded-full px-1.5 text-[11px] font-semibold text-white" style={{ background: FOLLOW_GROUP_INFO[q.followGroup as FollowGroup]?.color ?? "#99afc4" }}>
+                      {q.followScore}
+                    </span>
+                  </Tooltip>
+                )}
                 {q.inHours === false && (
                   <Tooltip content="Outside their business hours">
                     <Clock className="size-3.5 shrink-0 text-ink-subtle" />
@@ -301,6 +309,8 @@ function Session({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [snoozeAt, setSnoozeAt] = useState("");
+  // Caller feedback for a conversation outcome waiting to be logged
+  const [pending, setPending] = useState<string | null>(null);
   // Outcomes per person ("" = the company line): recent calls plus what was logged on this visit
   const [triedNow, setTried] = useState<Record<string, string>>({});
   const tried = { ...recent, ...triedNow };
@@ -366,8 +376,14 @@ function Session({
     onChanged(`Note saved on ${c.name}`);
   }
 
-  async function log(result: string) {
+  /** Conversation outcomes ask for quick feedback first (unless the caller already gave it or skips it). */
+  async function log(result: string, withFeedback?: Feedback | null) {
     if (busy) return;
+    if (withFeedback === undefined && CONVERSATION_OUTCOMES.includes(result)) {
+      setPending(result);
+      return;
+    }
+    setPending(null);
     setBusy(true);
     setError(null);
     setRunning(false);
@@ -383,15 +399,19 @@ function Session({
       targetContactId: contactId || null,
       body: notes,
       occurredAt: new Date().toISOString(),
+      feedbackRating: withFeedback?.rating ?? null,
+      feedbackTags: withFeedback?.tags ?? [],
+      revisitAt: withFeedback?.revisitAt ?? null,
       campaignId: data.campaign.id,
       // Due on their working morning, so the follow-up comes up when they can be reached
-      followUp: rule ? { title: rule.taskTitle, taskType: rule.taskType, dueAt: nextLocalMorning(c.timeZone, new Date(), rule.dueInDays) } : null,
+      // A revisit date replaces the usual follow-up task: the company comes back to the queue on that date
+      followUp: rule && !withFeedback?.revisitAt ? { title: rule.taskTitle, taskType: rule.taskType, dueAt: nextLocalMorning(c.timeZone, new Date(), rule.dueInDays) } : null,
     });
     setBusy(false);
     if (!res.ok) return setError(res.error);
     const auto = res.data!.automations;
     const who = contact?.name ?? c.name;
-    const message = `${who}: ${result} logged${rule ? `, follow-up "${rule.taskTitle}" in ${rule.dueInDays} day${rule.dueInDays === 1 ? "" : "s"}` : ""}${auto.length ? `. ${auto.join(", ")}` : ""}`;
+    const message = `${who}: ${result} logged${withFeedback?.rating ? ` (${withFeedback.rating})` : ""}${withFeedback?.revisitAt ? `, back in the queue on ${formatDate(withFeedback.revisitAt)}` : rule ? `, follow-up "${rule.taskTitle}" in ${rule.dueInDays} day${rule.dueInDays === 1 ? "" : "s"}` : ""}${auto.length ? `. ${auto.join(", ")}` : ""}`;
     // The note went with the call; drop the draft now, before the screen may move on
     try {
       localStorage.removeItem(draftKey);
@@ -431,7 +451,7 @@ function Session({
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const el = e.target instanceof Element ? e.target : null;
-      if (dialog || el?.closest("input, textarea, select, [contenteditable], [role=dialog]") || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (dialog || pending || el?.closest("input, textarea, select, [contenteditable], [role=dialog]") || e.ctrlKey || e.metaKey || e.altKey) return;
       const i = KEYS.indexOf(e.key);
       if (i >= 0 && outcomes[i]) {
         e.preventDefault();
@@ -541,6 +561,7 @@ function Session({
             <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[12px]">
               {c.leadState && <Pill label={c.leadState} color={journey?.color} />}
               {c.member && <Pill label={c.member.status} />}
+              <FollowBadge group={c.followGroup} score={c.followScore} />
               <span className={cn("text-ink-muted", maxed && "font-medium text-danger")}>
                 {c.member?.attempts ?? 0}
                 {data.campaign.maxAttempts ? ` of ${data.campaign.maxAttempts}` : ""} attempts in this campaign
@@ -548,6 +569,7 @@ function Session({
               </span>
               {c.member?.nextActionAt && <span className="text-ink-muted">· next action {friendlyDateTime(c.member.nextActionAt)}</span>}
             </div>
+            {c.followReason && <div className="mt-1 text-[12px] text-ink-muted">Caller feedback: {c.followReason}</div>}
             <div className="mt-2 flex flex-wrap gap-1.5">
               <Button size="sm" variant="secondary" onClick={() => setDialog({ kind: "company" })}>
                 <Pencil /> Correct company info
@@ -821,6 +843,8 @@ function Session({
 
         {error && <p className="rounded-[3px] bg-danger-soft px-3 py-2 text-[13px] text-danger">{error}</p>}
 
+        {pending && <FeedbackPanel result={pending} busy={busy} who={contact?.name ?? c.name} onLog={(fb) => void log(pending, fb)} onCancel={() => setPending(null)} />}
+
         <div>
           <div className="mb-1.5 flex items-center justify-between text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">
             {autoNext ? "Outcome: one click logs it and moves on" : "Outcome: one click logs it, then the next person"}
@@ -883,7 +907,14 @@ function CallItem({ a }: { a: QueueCompany["calls"][number] }) {
         {a.path && <span className="text-[12px] text-ink-muted">via {a.path}</span>}
         {a.gatekeeperType && <span className="text-[12px] text-ink-muted">({a.gatekeeperType})</span>}
         {a.campaign && <Pill label={a.thisCampaign ? "This campaign" : a.campaign.name} color={a.thisCampaign ? "#00a4bd" : undefined} />}
+        {a.feedbackRating && <Pill label={a.feedbackRating} color={FEEDBACK_RATINGS.find((r) => r.value === a.feedbackRating)?.color} />}
       </div>
+      {(a.feedbackTags.length > 0 || a.revisitAt) && (
+        <div className="text-[12px] text-ink-muted">
+          {a.feedbackTags.map((t) => FEEDBACK_TAGS.find((x) => x.key === t)?.short ?? t).join(" · ")}
+          {a.revisitAt ? `${a.feedbackTags.length ? " · " : ""}ask again ${formatDate(a.revisitAt)}` : ""}
+        </div>
+      )}
       <div className="text-[12px] text-ink-subtle">
         {friendlyDateTime(a.at)}
         {a.contact ? ` · ${a.contact}` : ""}
@@ -893,5 +924,98 @@ function CallItem({ a }: { a: QueueCompany["calls"][number] }) {
       </div>
       {a.body && <p className="whitespace-pre-line text-ink">{a.body.replace(/<[^>]+>/g, "")}</p>}
     </li>
+  );
+}
+
+type Feedback = { rating: string | null; tags: string[]; revisitAt: string | null };
+
+/** Date N months from now, as yyyy-mm-dd. */
+function monthsAhead(n: number) {
+  const d = new Date();
+  d.setMonth(d.getMonth() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Five-second feedback after a real conversation: how promising, what we learned, when to ask again. */
+function FeedbackPanel({ result, who, busy, onLog, onCancel }: { result: string; who: string; busy: boolean; onLog: (fb: Feedback | null) => void; onCancel: () => void }) {
+  const [rating, setRating] = useState<string | null>(null);
+  const [tags, setTags] = useState<string[]>([]);
+  const [revisit, setRevisit] = useState("");
+  const notNow = tags.includes("not_now");
+  const toggle = (k: string) => setTags((t) => (t.includes(k) ? t.filter((x) => x !== k) : [...t, k]));
+  return (
+    <div className="space-y-2.5 rounded-[6px] border-2 border-link bg-surface p-3 text-[13px] shadow-sm" role="group" aria-label="Caller feedback">
+      <div>
+        <div className="font-semibold">Quick feedback: {result}</div>
+        <div className="text-[12px] text-ink-muted">How promising is {who}? This decides who to chase and who to nurture.</div>
+      </div>
+      <div className="grid grid-cols-3 gap-1.5">
+        {FEEDBACK_RATINGS.map((r) => (
+          <Tooltip key={r.value} content={r.help}>
+            <button
+              type="button"
+              onClick={() => setRating((x) => (x === r.value ? null : r.value))}
+              aria-pressed={rating === r.value}
+              className={cn("rounded-[4px] border-2 py-1.5 font-semibold", rating === r.value ? "text-white" : "bg-surface hover:bg-surface-hover")}
+              style={{ borderColor: r.color, ...(rating === r.value ? { background: r.color } : { color: r.color }) }}
+            >
+              {r.value}
+            </button>
+          </Tooltip>
+        ))}
+      </div>
+      <div className="grid grid-cols-1 gap-1">
+        {FEEDBACK_TAGS.map((t) => (
+          <label key={t.key} className="flex cursor-pointer items-center gap-2">
+            <input type="checkbox" className="accent-[var(--link)]" checked={tags.includes(t.key)} onChange={() => toggle(t.key)} />
+            {t.label}
+          </label>
+        ))}
+      </div>
+      {notNow && (
+        <div className="rounded-[4px] bg-surface-muted p-2">
+          <div className="mb-1 text-[12px] font-medium">Ask again on</div>
+          <div className="flex flex-wrap gap-1.5">
+            {[1, 3, 6].map((m) => (
+              <Button key={m} size="sm" variant={revisit === monthsAhead(m) ? "primary" : "secondary"} onClick={() => setRevisit(monthsAhead(m))}>
+                {m} month{m === 1 ? "" : "s"}
+              </Button>
+            ))}
+            <Input type="date" value={revisit} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setRevisit(e.target.value)} className="h-8 w-[150px]" aria-label="Revisit date" />
+          </div>
+          <div className="mt-1 text-[11px] text-ink-subtle">The company leaves the queue and comes back on this date.</div>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-1.5">
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={busy || (notNow && !revisit)}
+          onClick={() => onLog({ rating, tags, revisitAt: notNow && revisit ? new Date(`${revisit}T09:00:00`).toISOString() : null })}
+        >
+          Save feedback &amp; log
+        </Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => onLog(null)}>
+          Log without feedback
+        </Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+      {notNow && !revisit && <p className="text-[11px] text-danger">Pick when to ask again, or untick &ldquo;Not now&rdquo;.</p>}
+    </div>
+  );
+}
+
+/** Follow-up group and score, e.g. "Chase now · 72". */
+export function FollowBadge({ group, score }: { group: string | null; score: number }) {
+  if (!group) return null;
+  const info = FOLLOW_GROUP_INFO[group as FollowGroup];
+  return (
+    <Tooltip content={info?.help ?? group}>
+      <span className="inline-flex items-center gap-1 rounded-full px-2 py-[1px] text-[12px] font-semibold text-white" style={{ background: info?.color ?? "#99afc4" }}>
+        {group} · {score}
+      </span>
+    </Tooltip>
   );
 }

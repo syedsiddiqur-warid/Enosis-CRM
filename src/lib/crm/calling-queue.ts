@@ -18,6 +18,8 @@ interface Orderable {
   nextActionAt: string | null;
   lastCallAt: string | null;
   addedAt: string;
+  /** Follow-up score from caller feedback: among companies already called, the best prospects come first */
+  followScore?: number;
 }
 
 /** Which part of the queue a company is in:
@@ -35,7 +37,7 @@ export function compareQueue(a: Orderable, b: Orderable, now = Date.now()) {
   const bb = queueBucket(b, now);
   if (ba !== bb) return BUCKET_ORDER.indexOf(ba) - BUCKET_ORDER.indexOf(bb);
   if (ba === "due" || ba === "scheduled") return t(a.nextActionAt) - t(b.nextActionAt);
-  if (ba === "retry") return t(a.lastCallAt) - t(b.lastCallAt); // least recently called first
+  if (ba === "retry") return (b.followScore ?? 0) - (a.followScore ?? 0) || t(a.lastCallAt) - t(b.lastCallAt); // best prospects, then least recently called
   return t(a.addedAt) - t(b.addedAt);
 }
 

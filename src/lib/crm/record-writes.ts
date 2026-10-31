@@ -2,6 +2,7 @@
 // Not a "use server" module: these take a trusted userId and must never be callable from the client.
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { rescoreCompanies } from "./follow-score";
 import { findRegion, normalizeCountry, normalizeRegion, timeZoneFor } from "./geo";
 import { JOURNEY_PROPERTY, shouldMove, stageForProperty, type JourneyMeta } from "./journey";
 import { coerceValue, getPropDefs } from "./properties";
@@ -84,6 +85,8 @@ export async function applyUpdate(
 async function afterCompanyChange(id: string, property: string, before: unknown, value: unknown, userId: string, meta: { rule?: string; journey?: JourneyMeta }) {
   if (property === JOURNEY_PROPERTY) {
     await db.company.update({ where: { id }, data: { leadStateAt: new Date() } });
+    // Disqualified / Nurture and similar stages change who is worth following up
+    await rescoreCompanies([id]);
     if (value) {
       await db.journeyEvent.create({
         data: {

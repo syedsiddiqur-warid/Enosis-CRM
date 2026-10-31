@@ -84,6 +84,12 @@ export const SIGNAL_TYPES = opts([
 export const SIGNAL_STRENGTHS = opts([["High", "#00bda5"], ["Medium", "#f5c26b"], ["Low", "#cbd6e2"]]);
 export const SIGNAL_SOURCES = opts([["Manual research"], ["Apollo.io"], ["Lusha"], ["LinkedIn"], ["Crunchbase"], ["Job boards"], ["News"], ["Company website"]]);
 
+export const FOLLOW_GROUP_OPTIONS = opts([
+  ["Chase now", "#00a38d"],
+  ["Nurture", "#6a78d1"],
+  ["Keep trying", "#f5a623"],
+  ["Drop", "#99afc4"],
+]);
 export const CAMPAIGN_TYPES = opts([["Buying signal"], ["ICP"], ["Custom set"], ["Re-engagement"], ["Event"]]);
 export const CAMPAIGN_MEMBER_STATUSES = opts([
   ["Queued", "#cbd6e2"],
@@ -318,6 +324,10 @@ export const PROPERTIES: Record<CrmObject, SeedProp[]> = {
     { name: "lastSignalAt", label: "Last signal date", type: "DATETIME", group: "campaign", isReadOnly: true },
     { name: "callStatus", label: "Call status", type: "ENUM", group: "calling", options: CALL_STATUSES, isReadOnly: true, description: "Best call outcome across the company's contacts" },
     { name: "crtCount", label: "CRT count", type: "NUMBER", group: "calling", isReadOnly: true, description: "Calls logged to this company or its contacts" },
+    { name: "followScore", label: "Follow-up score", type: "NUMBER", group: "calling", isReadOnly: true, description: "0–100 from calling history and caller feedback; higher = better prospect" },
+    { name: "followGroup", label: "Follow-up group", type: "ENUM", group: "calling", isReadOnly: true, options: FOLLOW_GROUP_OPTIONS, description: "Chase now / Nurture / Keep trying / Drop, from the follow-up score" },
+    { name: "followReason", label: "Caller feedback", type: "TEXT", group: "calling", isReadOnly: true, description: "What callers heard, in one line" },
+    { name: "revisitAt", label: "Revisit on", type: "DATE", group: "calling", description: "Not now: the company comes back to the calling queue on this date" },
     { name: "connectedCount", label: "Connected calls", type: "NUMBER", group: "calling", isReadOnly: true },
     { name: "lastCallAt", label: "Last call date", type: "DATETIME", group: "calling", isReadOnly: true },
     { name: "gatekeeper", label: "Gatekeeper", type: "ENUM", group: "calling", isBuiltIn: false, options: opts([["Extension"], ["Operator"], ["DBND"], ["DBND and Operator"]]), description: "How calls to the main line are screened" },

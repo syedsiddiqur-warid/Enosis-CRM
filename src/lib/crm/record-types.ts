@@ -82,6 +82,11 @@ export interface ActivityInput {
   gatekeeperType?: string | null;
   durationSec?: number | null;
   targetContactId?: string | null;
+  /** Calls: caller feedback after a real conversation */
+  feedbackRating?: string | null;
+  feedbackTags?: string[];
+  /** "Not now": ask again on this date; the company comes back to the calling queue then */
+  revisitAt?: string | null;
   subject?: string | null;
   emailTo?: string[];
   emailCc?: string[];

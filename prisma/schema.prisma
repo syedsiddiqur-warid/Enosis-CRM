@@ -210,6 +210,15 @@ model Company {
   researcherId    String?
   researcher      User?     @relation("CompanyResearcher", fields: [researcherId], references: [id], onDelete: SetNull)
   researchedAt    DateTime?
+  // Follow-up score from calling history and caller feedback (0–100) and its group:
+  // Chase now / Nurture / Keep trying / Drop. Recalculated whenever a call is logged.
+  followScore     Int       @default(0)
+  followGroup     String?
+  followReason    String?
+  followCallerId  String?
+  followUpdatedAt DateTime?
+  // "Not now": when to ask again; the company comes back to the calling queue then
+  revisitAt       DateTime?
   // Company-level calling rollups (all calls to the company or its contacts)
   callStatus      String?
   crtCount        Int       @default(0)
@@ -244,6 +253,7 @@ model Company {
   @@index([leadStatus])
   @@index([leadState])
   @@index([researcherId])
+  @@index([followGroup, followScore])
   @@index([campaign])
   @@index([country])
   @@index([deletedAt])
@@ -375,6 +385,10 @@ model Activity {
   gatekeeperType  String?
   durationSec     Int?
   followUpEmailTo String?
+  // Caller feedback after a real conversation: Hot / Warm / Cold, what was learned, and when to ask again
+  feedbackRating  String?
+  feedbackTags    String[]
+  revisitAt       DateTime?
 
   // Email (logged manually in v1)
   subject        String?

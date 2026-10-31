@@ -13,6 +13,7 @@ import {
   Megaphone,
   PhoneCall,
   Settings,
+  Target,
   UserRound,
   UsersRound,
 } from "lucide-react";
@@ -40,6 +41,7 @@ const SECTIONS = [
     items: [
       { href: "/campaigns", label: "Campaigns", icon: Megaphone },
       { href: "/prospecting", label: "Prospecting", icon: PhoneCall },
+      { href: "/follow-ups", label: "Follow-ups", icon: Target },
       { href: "/research", label: "Research Queue", icon: FlaskConical },
     ],
   },
