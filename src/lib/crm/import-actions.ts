@@ -371,11 +371,17 @@ async function importRow(p: Prepared, run: RunContext, row: number): Promise<{ a
       existing = await db.company.findFirst({ where: { name: { equals: String(p.builtIn.name), mode: "insensitive" }, deletedAt: null }, select: { id: true, properties: true, leadState: true } });
     }
   }
-  if (existing && options.mode === "create") return { action: "skipped", id: existing.id, message: object === "CONTACT" ? "A contact with this email already exists" : "This company already exists" };
+  // A company that's already with sales (or a client, or off limits) is flagged, so research doesn't work it twice
+  const flags = object === "COMPANY" && existing ? await matchFlags(existing.id) : "";
+  if (existing && options.mode === "create")
+    return { action: "skipped", id: existing.id, message: object === "CONTACT" ? "A contact with this email already exists" : `This company already exists${flags ? ` (${flags})` : ""}` };
   if (!existing && options.mode === "update") return { action: "skipped", message: "No matching record to update" };
 
   const companyId = object === "CONTACT" ? await findOrCreateCompany(p, run) : null;
-  if (run.dryRun) return { action: existing ? "updated" : "created", id: existing?.id, message: p.warnings.length ? `not CRM users yet: ${p.warnings.join(", ")}` : undefined };
+  if (run.dryRun) {
+    const message = [flags && `already in the CRM: ${flags}`, p.warnings.length && `not CRM users yet: ${p.warnings.join(", ")}`].filter(Boolean).join(" · ");
+    return { action: existing ? "updated" : "created", id: existing?.id, message: message || undefined };
+  }
 
   // 2. Write
   let id: string;
@@ -475,6 +481,8 @@ async function importRow(p: Prepared, run: RunContext, row: number): Promise<{ a
     const researched = !!(p.builtIn.researchedAt || p.custom.researchResult || p.custom.viable || p.custom.callable);
     const stage = p.custom.callable === "Yes" ? STAGE.callable : p.custom.viable === "Yes" ? STAGE.viable : researched ? STAGE.researched : null;
     if (stage) await advanceJourney(id, stage, run.userId, { source: "import", reason: run.source });
+    // Callable in the file: it waits in the Handover pool from now
+    if (p.custom.callable === "Yes") await db.company.updateMany({ where: { id, readyAt: null }, data: { readyAt: new Date() } });
     if (researched && !p.builtIn.researchStatus) await db.company.updateMany({ where: { id, researchStatus: { in: ["Not started", "In progress"] } }, data: { researchStatus: "Done" } });
   }
   if (run.segmentId) {
@@ -484,8 +492,33 @@ async function importRow(p: Prepared, run: RunContext, row: number): Promise<{ a
       update: {},
     });
   }
-  const message = [leadPerson === "created" && "lead person added", dynMessage, p.warnings.length && `not CRM users yet: ${p.warnings.join(", ")}`].filter(Boolean).join(" · ");
+  const message = [flags && `already in the CRM: ${flags}`, leadPerson === "created" && "lead person added", dynMessage, p.warnings.length && `not CRM users yet: ${p.warnings.join(", ")}`]
+    .filter(Boolean)
+    .join(" · ");
   return { action: existing ? "updated" : "created", id, message: message || undefined };
+}
+
+/** Why a matched company needs care: it's a client, off limits, with sales already, or ready for them. */
+async function matchFlags(companyId: string) {
+  const c = await db.company.findUnique({
+    where: { id: companyId },
+    select: {
+      leadState: true,
+      readyAt: true,
+      properties: true,
+      campaigns: { where: { removedAt: null, campaign: { status: { in: ["DRAFT", "ACTIVE", "PAUSED"] } } }, select: { campaign: { select: { name: true } } }, take: 2 },
+    },
+  });
+  if (!c) return "";
+  const p = (c.properties ?? {}) as { callable?: string };
+  return [
+    c.leadState === STAGE.customer && "client",
+    c.leadState === "Do not contact" && "do not contact",
+    c.campaigns.length > 0 && `in campaign ${c.campaigns.map((m) => m.campaign.name).join(", ")}`,
+    !c.campaigns.length && (c.readyAt || p.callable === "Yes") && "ready to call, waiting in Handover",
+  ]
+    .filter(Boolean)
+    .join(", ");
 }
 
 /** Company imports: the row's lead person, matched by email or by name at the company, else created; linked to the company.
@@ -874,6 +907,11 @@ export async function startImport(setup: ImportSetup): Promise<Result<{ jobId: s
     if (setup.options.researcherIds?.length) {
       const active = await db.user.findMany({ where: { id: { in: setup.options.researcherIds }, isActive: true }, select: { id: true } });
       setup.options.researcherIds = setup.options.researcherIds.filter((id) => active.some((u) => u.id === id));
+    }
+    // Every import is a batch: without one, tag it with the date and file so reports can follow it to clients
+    if (!setup.options.batchNumber?.trim()) {
+      const base = setup.fileName.replace(/\.[^.]+$/, "").trim();
+      setup.options.batchNumber = `${new Date().toISOString().slice(0, 10)} ${base}`.slice(0, 40).trim();
     }
     let segmentId: string | null = null;
     const segName = setup.options.segmentName?.trim();

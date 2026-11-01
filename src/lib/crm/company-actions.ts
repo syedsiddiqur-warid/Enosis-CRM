@@ -232,22 +232,29 @@ export async function moveResearchCard(companyId: string, column: ResearchColumn
 }
 
 /** Move a batch of companies (the client sends large selections in chunks and shows progress). */
-export async function moveResearchCards(ids: string[], column: ResearchColumn): Promise<Result<{ moved: number; failed: number }>> {
+export async function moveResearchCards(ids: string[], column: ResearchColumn): Promise<Result<{ moved: number; failed: number; reasons: string[] }>> {
   try {
     const user = await requireUser();
     if (ids.length > 100) throw new Error("Send at most 100 companies per request");
     let moved = 0;
     let failed = 0;
+    // Why moves failed (e.g. the ready-to-call checklist), counted so the board can say what to fix
+    const why = new Map<string, number>();
     // A few at a time: each move writes several fields, an audit row and the journey
     for (let i = 0; i < ids.length; i += 4) {
       const results = await Promise.allSettled(ids.slice(i, i + 4).map((id) => moveOne(id, column, user.id)));
       for (const r of results) {
         if (r.status === "fulfilled") moved++;
-        else failed++;
+        else {
+          failed++;
+          const m = r.reason instanceof Error ? r.reason.message : "Something went wrong";
+          why.set(m, (why.get(m) ?? 0) + 1);
+        }
       }
     }
     revalidateCompany();
-    return { ok: true, data: { moved, failed } };
+    const reasons = [...why].sort((a, b) => b[1] - a[1]).map(([m, n]) => `${m} (${n})`);
+    return { ok: true, data: { moved, failed, reasons } };
   } catch (e) {
     return fail(e);
   }

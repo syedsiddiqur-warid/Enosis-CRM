@@ -287,6 +287,15 @@ function BoardView({ data, onMessage }: { data: ResearchData; onMessage: (m: str
                       )}
                       <span className="ml-auto">{daysSince(c.since)}d</span>
                     </div>
+                    {c.missing.length > 0 ? (
+                      <div className="mt-1.5 rounded-[3px] bg-[#fdf3e1] px-1.5 py-0.5 text-[11px] text-[#8a5a00]" title="Needed before this company can be marked Callable">
+                        To be ready: {c.missing.join(", ")}
+                      </div>
+                    ) : (
+                      (c.column === "researched" || c.column === "viable") && (
+                        <div className="mt-1.5 rounded-[3px] bg-[#e5f8f6] px-1.5 py-0.5 text-[11px] text-[#00806e]">Ready to call: all checks pass</div>
+                      )
+                    )}
                   </article>
                 );
               })}

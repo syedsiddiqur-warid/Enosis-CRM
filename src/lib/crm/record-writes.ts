@@ -6,6 +6,7 @@ import { rescoreCompanies } from "./follow-score";
 import { findRegion, normalizeCountry, normalizeRegion, timeZoneFor } from "./geo";
 import { JOURNEY_PROPERTY, shouldMove, stageForProperty, type JourneyMeta } from "./journey";
 import { coerceValue, getPropDefs } from "./properties";
+import { assertReadyToCall } from "./ready-check";
 import type { CrmObject } from "./types";
 
 const json = (v: unknown) => v as Prisma.InputJsonValue;
@@ -42,6 +43,8 @@ export async function applyUpdate(
   const value = coerceValue(def, rawValue);
   const before = def.isBuiltIn ? record[property] : record.properties?.[property];
   if (JSON.stringify(before ?? null) === JSON.stringify(value ?? null)) return false;
+  // Research hands a company to sales only when it passes the ready-to-call checklist
+  if (object === "COMPANY" && property === "callable" && value === "Yes" && !meta.rule) await assertReadyToCall(id);
 
   if (def.type === "USER" && value) {
     const exists = await db.user.count({ where: { id: String(value) } });
@@ -110,7 +113,11 @@ async function afterCompanyChange(id: string, property: string, before: unknown,
     const props = (company.properties ?? {}) as Prisma.JsonObject;
     await db.company.update({
       where: { id },
-      data: { properties: { ...props, [`${property}CheckedBy`]: value ? userId : null, [`${property}CheckedOn`]: value ? now.toISOString() : null } },
+      data: {
+        properties: { ...props, [`${property}CheckedBy`]: value ? userId : null, [`${property}CheckedOn`]: value ? now.toISOString() : null },
+        // Callable starts (or ends) its wait in the Handover pool
+        ...(property === "callable" ? { readyAt: value === "Yes" ? now : null } : {}),
+      },
     });
   }
   if (property === "researchStatus" && value === "Done") {

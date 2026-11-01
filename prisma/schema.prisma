@@ -212,6 +212,8 @@ model Company {
   researcherId    String?
   researcher      User?     @relation("CompanyResearcher", fields: [researcherId], references: [id], onDelete: SetNull)
   researchedAt    DateTime?
+  // When research marked it callable: the start of its wait in the sales handover pool
+  readyAt         DateTime?
   // Follow-up score from calling history and caller feedback (0–100) and its group:
   // Chase now / Nurture / Keep trying / Drop. Recalculated whenever a call is logged.
   followScore     Int       @default(0)
@@ -260,6 +262,7 @@ model Company {
   @@index([campaign])
   @@index([country])
   @@index([deletedAt])
+  @@index([readyAt])
   @@index([properties(ops: JsonbPathOps)], type: Gin)
 }
 

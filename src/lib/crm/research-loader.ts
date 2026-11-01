@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { fullName } from "@/lib/utils";
 import { PROVIDERS, isConfigured } from "./integrations";
 import { getPropDefs } from "./properties";
+import { missingChecks, readyChecksFor } from "./ready-check";
 import { RESEARCH_COLUMNS, researchColumn, type ResearchColumn } from "./research";
 import type { PropOption, UserLite } from "./types";
 
@@ -119,7 +120,12 @@ export async function researchCards(ids: string[]) {
       },
     ]),
   );
-  return ids.map((id) => byId.get(id)).filter((c) => !!c);
+  // Researched and viable companies show what still stops them being ready to call
+  const checks = await readyChecksFor([...byId.values()].filter((c) => c.column === "researched" || c.column === "viable").map((c) => c.id));
+  return ids
+    .map((id) => byId.get(id))
+    .filter((c) => !!c)
+    .map((c) => ({ ...c, missing: checks.has(c.id) ? missingChecks(checks.get(c.id)!) : [] }));
 }
 
 export type ResearchCard = Awaited<ReturnType<typeof researchCards>>[number];

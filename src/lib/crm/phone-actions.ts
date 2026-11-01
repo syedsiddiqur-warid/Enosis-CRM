@@ -134,3 +134,65 @@ export async function deletePhoneNumber(object: CrmObject, recordId: string, id:
     return fail(e);
   }
 }
+
+/** Where a number is now: one of the company's saved numbers, or the phone/mobile field on a contact record. */
+export type NumberSource = { phoneId: string } | { contactId: string; field: "phone" | "mobile" };
+
+/**
+ * Callers find out which number is the company's and which is a person's direct line: move a number
+ * to the company numbers (toContactId null) or to one of the company's people.
+ */
+export async function moveCompanyNumber(companyId: string, source: NumberSource, toContactId: string | null): Promise<Result> {
+  try {
+    const user = await requireUser();
+    if (toContactId) await owner("COMPANY", companyId, toContactId);
+    const who = toContactId ? await db.contact.findUnique({ where: { id: toContactId }, select: { firstName: true, lastName: true } }) : null;
+    const label = who ? [who.firstName, who.lastName].filter(Boolean).join(" ") || "a contact" : "company numbers";
+    if ("phoneId" in source) {
+      const prev = await db.phoneNumber.findUniqueOrThrow({ where: { id: source.phoneId } });
+      if (prev.companyId !== companyId) throw new Error("That number isn't on this company");
+      if ((prev.contactId ?? null) === toContactId) return { ok: true };
+      // A company line moved to a person is their direct line (and the other way round), unless the caller set something more specific
+      const type = toContactId && prev.type === "Main" ? "Direct" : !toContactId && ["Direct", "Mobile"].includes(prev.type) ? "Main" : prev.type;
+      await db.phoneNumber.update({ where: { id: prev.id }, data: { contactId: toContactId, type } });
+      await db.auditLog.create({ data: { objectType: "COMPANY", recordId: companyId, action: "move_phone", changes: { number: prev.number, from: prev.contactId, to: toContactId }, userId: user.id } });
+      await timeline("COMPANY", companyId, user.id, `Phone ${prev.number} moved to`, label);
+    } else {
+      // A number typed on the contact record becomes a saved number on the company, and leaves the contact field
+      const c = await db.contact.findUniqueOrThrow({ where: { id: source.contactId }, select: { phone: true, mobile: true } });
+      const number = toE164(c[source.field] ?? "");
+      if (!number) throw new Error("That contact has no number there");
+      const exists = await db.phoneNumber.findFirst({ where: { companyId, number, extension: null } });
+      if (exists) await db.phoneNumber.update({ where: { id: exists.id }, data: { contactId: toContactId } });
+      else
+        await db.phoneNumber.create({
+          data: { companyId, contactId: toContactId, number, type: toContactId ? (source.field === "mobile" ? "Mobile" : "Direct") : "Main", status: "Unknown" },
+        });
+      if (toContactId !== source.contactId) {
+        await db.contact.update({ where: { id: source.contactId }, data: { [source.field]: null } });
+        await db.auditLog.create({ data: { objectType: "CONTACT", recordId: source.contactId, action: "update", changes: { [source.field]: { from: c[source.field], to: null } }, userId: user.id } });
+      }
+      await timeline("COMPANY", companyId, user.id, `Phone ${number} moved to`, label);
+    }
+    revalidate("COMPANY", companyId);
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** A caller's note on a number, e.g. "Ext 204 reaches the CTO". */
+export async function setPhoneNotes(companyId: string, id: string, notes: string): Promise<Result> {
+  try {
+    const user = await requireUser();
+    const prev = await db.phoneNumber.findUniqueOrThrow({ where: { id } });
+    if (prev.companyId !== companyId) throw new Error("That number isn't on this company");
+    const next = notes.trim().slice(0, 1000) || null;
+    await db.phoneNumber.update({ where: { id }, data: { notes: next } });
+    await db.auditLog.create({ data: { objectType: "COMPANY", recordId: companyId, action: "update_phone", changes: { number: prev.number, notes: { from: prev.notes, to: next } }, userId: user.id } });
+    revalidate("COMPANY", companyId);
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}

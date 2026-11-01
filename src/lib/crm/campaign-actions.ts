@@ -15,6 +15,7 @@ import type { FilterGroup } from "./types";
 type Result<T = undefined> = { ok: true; data?: T } | { ok: false; error: string };
 const fail = (e: unknown): { ok: false; error: string } => ({ ok: false, error: e instanceof Error ? e.message : "Something went wrong" });
 const json = (v: unknown) => v as Prisma.InputJsonValue;
+const chunk = <T>(list: T[], size: number) => Array.from({ length: Math.ceil(list.length / size) }, (_, i) => list.slice(i * size, (i + 1) * size));
 const STATUSES: CampaignStatus[] = ["DRAFT", "ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"];
 
 function revalidate(id?: string) {
@@ -407,6 +408,43 @@ export async function assignMembers(id: string, companyIds: string[], userIds: s
     }
     revalidate(id);
     return { ok: true, data: { assigned: companyIds.length } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * Handover: give companies to callers. "even" deals them out in turn; "timezone" keeps each time zone with one
+ * caller (largest zones first, to whoever has the fewest), so every caller works one set of calling hours.
+ */
+export async function assignCallers(id: string, companyIds: string[], userIds: string[], mode: "even" | "timezone"): Promise<Result<{ assigned: number; perCaller: Record<string, number> }>> {
+  try {
+    const user = await requireUser();
+    await editable(id, user.id);
+    if (!userIds.length) throw new Error("Pick at least one caller");
+    if (companyIds.length > 20000) throw new Error("Assign at most 20,000 companies at a time");
+    const callers = await db.user.findMany({ where: { id: { in: userIds }, isActive: true }, select: { id: true } });
+    if (callers.length !== new Set(userIds).size) throw new Error("Pick active users as callers");
+    const plan = new Map<string, string[]>(userIds.map((u) => [u, []]));
+    if (mode === "even") {
+      companyIds.forEach((c, i) => plan.get(userIds[i % userIds.length])!.push(c));
+    } else {
+      const rows = (await Promise.all(chunk(companyIds, 5000).map((ids) => db.company.findMany({ where: { id: { in: ids } }, select: { id: true, timeZone: true } })))).flat();
+      const zones = new Map<string, string[]>();
+      for (const r of rows) zones.set(r.timeZone ?? "Unknown", [...(zones.get(r.timeZone ?? "Unknown") ?? []), r.id]);
+      for (const ids of [...zones.values()].sort((a, b) => b.length - a.length)) {
+        const lightest = userIds.reduce((a, b) => (plan.get(b)!.length < plan.get(a)!.length ? b : a));
+        plan.get(lightest)!.push(...ids);
+      }
+    }
+    let assigned = 0;
+    for (const [assignedToId, ids] of plan) {
+      for (const part of chunk(ids, 5000)) {
+        assigned += (await db.campaignCompany.updateMany({ where: { campaignId: id, companyId: { in: part }, removedAt: null }, data: { assignedToId } })).count;
+      }
+    }
+    revalidate(id);
+    return { ok: true, data: { assigned, perCaller: Object.fromEntries([...plan].map(([u, ids]) => [u, ids.length])) } };
   } catch (e) {
     return fail(e);
   }

@@ -1,17 +1,17 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, ChevronLeft, Clock, ExternalLink, FlaskConical, NotebookPen, Pause, Pencil, Phone, PhoneCall, Play, Plus, Timer, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronLeft, Clock, ExternalLink, FlaskConical, NotebookPen, Pencil, Phone, PhoneCall, Plus, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { CompanyLogo, Pill } from "@/components/index/values";
+import { CompanyLogo, LocalTime, Pill } from "@/components/index/values";
 import { Button, Input, Select } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/overlays";
 import { BUCKET_LABEL, inBusinessHours, nextLocalMorning } from "@/lib/crm/calling-queue";
 import type { QueueCompany, QueueData } from "@/lib/crm/calling-queue-loader";
-import { snoozeMember } from "@/lib/crm/campaign-actions";
-import { formatDate, friendlyDateTime, fromLocalInput, localTime } from "@/lib/crm/dates";
+import { formatDate, friendlyDateTime, fromLocalInput, toLocalInput } from "@/lib/crm/dates";
 import { CONVERSATION_OUTCOMES, FEEDBACK_RATINGS, FEEDBACK_TAGS, FOLLOW_GROUP_INFO, type FollowGroup } from "@/lib/crm/follow-up";
+import { moveCompanyNumber, setPhoneNotes, type NumberSource } from "@/lib/crm/phone-actions";
 import { logActivity } from "@/lib/crm/record-actions";
 import { cn, formatPhone } from "@/lib/utils";
 import { ContactDialog, EditCompanyDialog, NumberDialog, ResearchPanel, ResearchRequestDialog } from "./caller-tools";
@@ -40,19 +40,6 @@ export function CallingQueue({ data }: { data: QueueData }) {
   const [pending, startTransition] = useTransition();
   const [toast, setToast] = useState<Toast | null>(null);
   const [visited, setVisited] = useState<string[]>([]);
-  // Off by default: logging an outcome keeps the caller on the company to try its other people
-  const [autoNext, setAutoNextState] = useState(false);
-  useEffect(() => {
-    try {
-      setAutoNextState(localStorage.getItem("queue:autoNext") === "1");
-    } catch {}
-  }, []);
-  const setAutoNext = (v: boolean) => {
-    setAutoNextState(v);
-    try {
-      localStorage.setItem("queue:autoNext", v ? "1" : "0");
-    } catch {}
-  };
   const { queue, current } = data;
   const index = current ? queue.findIndex((q) => q.companyId === current.id) : -1;
   const ready = queue.filter((q) => q.bucket !== "scheduled").length;
@@ -149,20 +136,15 @@ export function CallingQueue({ data }: { data: QueueData }) {
             key={current.id}
             data={data}
             company={current}
-            autoNext={autoNext}
-            onAutoNext={setAutoNext}
             hasNext={!!nextId}
-            onLogged={(message, stay) => {
+            onLogged={(message) => {
               setToast({ message });
-              // Stay on this company (pinned in the URL, since logging can reorder the queue) to try its other people
-              if (stay) go({ id: current.id });
-              else if (nextId) moveTo(nextId);
-              else router.refresh();
+              // Stay on this company (pinned in the URL, since logging can reorder the queue): the caller moves on with Next company
+              go({ id: current.id });
             }}
             onSnoozed={(message) => {
-              setToast({ message });
-              if (nextId) moveTo(nextId);
-              else router.refresh();
+              setToast({ message: `${message}. Click Next company when you're done here.` });
+              go({ id: current.id });
             }}
             onChanged={(message) => {
               setToast({ message });
@@ -237,7 +219,7 @@ function QueueList({ data, onPick }: { data: QueueData; onPick: (id: string) => 
                 )}
               </div>
               <div className="flex gap-2 text-[12px] text-ink-subtle">
-                <span>{localTime(q.timeZone) ?? "--"}</span>
+                {q.timeZone ? <LocalTime tz={q.timeZone} /> : <span>--</span>}
                 <span>
                   {q.attempts} call{q.attempts === 1 ? "" : "s"}
                 </span>
@@ -261,8 +243,6 @@ function QueueList({ data, onPick }: { data: QueueData; onPick: (id: string) => 
 function Session({
   data,
   company: c,
-  autoNext,
-  onAutoNext,
   hasNext,
   onLogged,
   onSnoozed,
@@ -272,10 +252,8 @@ function Session({
 }: {
   data: QueueData;
   company: QueueCompany;
-  autoNext: boolean;
-  onAutoNext: (v: boolean) => void;
   hasNext: boolean;
-  onLogged: (message: string, stay: boolean) => void;
+  onLogged: (message: string) => void;
   onSnoozed: (message: string) => void;
   onChanged: (message: string) => void;
   onSkip: () => void;
@@ -296,21 +274,30 @@ function Session({
   const fresh = callable.filter((x) => !(x.id in recent));
   // Start with a decision maker nobody has tried yet
   const firstContact = fresh.find((x) => x.labels.includes("Decision maker")) ?? fresh[0] ?? callable.find((x) => x.labels.includes("Decision maker")) ?? callable[0] ?? null;
-  const firstPhone = usablePhone(firstContact?.id ?? null);
+  /** One selection at a time: a person's own number (saved line, then the number on their record), or nothing */
+  const numberFor = (id: string) => {
+    const own = c.phones.find((p) => p.contactId === id && !["Wrong", "Disconnected"].includes(p.status));
+    const x = c.contacts.find((p) => p.id === id);
+    const raw = x?.phone ?? x?.mobile;
+    return own ? `id:${own.id}` : raw ? `raw:${raw}` : "";
+  };
+  const companyLine = usablePhone(null);
+  const companyFirst = companyLine && !companyLine.contactId ? `id:${companyLine.id}` : c.phone ? `raw:${c.phone}` : "";
 
   const [contactId, setContactId] = useState(firstContact?.id ?? "");
-  const [phone, setPhone] = useState(firstPhone ? `id:${firstPhone.id}` : c.phone ? `raw:${c.phone}` : "");
-  const [path, setPath] = useState("");
+  const [phone, setPhone] = useState(firstContact ? numberFor(firstContact.id) : companyFirst);
   const [gatekeeper, setGatekeeper] = useState("");
   const [notes, setNotes] = useState("");
   const [followUp, setFollowUp] = useState(true);
-  const [seconds, setSeconds] = useState(0);
-  const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [snoozeAt, setSnoozeAt] = useState("");
-  // Caller feedback for a conversation outcome waiting to be logged
-  const [pending, setPending] = useState<string | null>(null);
+  // The call being filled in: outcome → notes → next call date, then Submit
+  const [outcome, setOutcome] = useState<string | null>(null);
+  const [nextAt, setNextAt] = useState("");
+  const [feedback, setFeedback] = useState<Feedback>({ rating: null, tags: [], revisitAt: null });
+  // The number whose note is being edited
+  const [noteFor, setNoteFor] = useState<string | null>(null);
+  const [noteText, setNoteText] = useState("");
   // Outcomes per person ("" = the company line): recent calls plus what was logged on this visit
   const [triedNow, setTried] = useState<Record<string, string>>({});
   const tried = { ...recent, ...triedNow };
@@ -328,25 +315,14 @@ function Session({
     onChanged(message);
   };
 
-  useEffect(() => {
-    if (!running) return;
-    const t = setInterval(() => setSeconds((s) => s + 1), 1000);
-    return () => clearInterval(t);
-  }, [running]);
-
   const contact = c.contacts.find((x) => x.id === contactId) ?? null;
-  const phoneRow = phone.startsWith("id:") ? c.phones.find((p) => p.id === phone.slice(3)) : null;
   const hours = inBusinessHours(c.timeZone);
   // Contact campaigns count attempts per person: the company is "maxed" once every targeted person is done
   const maxed = forPeople ? listed.length > 0 && listed.every((x) => x.target!.done) : !!data.campaign.maxAttempts && (c.member?.attempts ?? 0) >= data.campaign.maxAttempts;
   const journey = data.journeyOptions.find((o) => o.value === c.leadState);
 
-  function dial(p: string, startTimer = true) {
+  function dial(p: string) {
     setPhone(p);
-    if (startTimer) {
-      setSeconds(0);
-      setRunning(true);
-    }
   }
 
   // Unsent notes survive moving to another company or a reload
@@ -376,24 +352,38 @@ function Session({
     onChanged(`Note saved on ${c.name}`);
   }
 
-  /** Conversation outcomes ask for quick feedback first (unless the caller already gave it or skips it). */
-  async function log(result: string, withFeedback?: Feedback | null) {
-    if (busy) return;
-    if (withFeedback === undefined && CONVERSATION_OUTCOMES.includes(result)) {
-      setPending(result);
-      return;
-    }
-    setPending(null);
+  const conversation = !!outcome && CONVERSATION_OUTCOMES.includes(outcome);
+  const notNow = conversation && feedback.tags.includes("not_now");
+  const nextIso = nextAt ? fromLocalInput(nextAt) : null;
+  const pastNext = !!nextIso && new Date(nextIso).getTime() < Date.now() - 6e4;
+  /** "Mon, Nov 2, 9:30 AM their time (Today 9:30 PM yours)" */
+  const whenBoth = (iso: string) =>
+    c.timeZone
+      ? `${new Date(iso).toLocaleString("en-US", { timeZone: c.timeZone, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} their time (${friendlyDateTime(iso)} yours)`
+      : friendlyDateTime(iso);
+  const canSubmit = !!outcome && !busy && !pastNext && !(notNow && !nextIso);
+
+  /** Log the call with everything filled in, then stay on this company for its next person. */
+  async function submit() {
+    if (!outcome || !canSubmit) return;
+    const result = outcome;
+    const withFeedback: Feedback | null = conversation ? { ...feedback, revisitAt: notNow ? nextIso : null } : null;
     setBusy(true);
     setError(null);
-    setRunning(false);
     const rule = followUp ? data.followUpRules.find((r) => r.callResult === result) : undefined;
+    const who = contact?.name ?? c.name;
+    // A next call date the caller picked wins over the follow-up rule; "Not now" rests the company until then instead
+    const followUpTask =
+      nextIso && !notNow
+        ? { title: `Call ${who} again`, taskType: "Call", dueAt: nextIso }
+        : rule && !withFeedback?.revisitAt
+          ? // Due on their working morning, so the follow-up comes up when they can be reached
+            { title: rule.taskTitle, taskType: rule.taskType, dueAt: nextLocalMorning(c.timeZone, new Date(), rule.dueInDays) }
+          : null;
     const res = await logActivity("COMPANY", c.id, {
       type: "CALL",
       callResult: result,
-      callPath: path || null,
       gatekeeperType: /gatekeeper/i.test(result) ? gatekeeper || null : null,
-      durationSec: seconds || null,
       phoneNumberId: phone.startsWith("id:") ? phone.slice(3) : null,
       dialedNumber: phone.startsWith("raw:") ? phone.slice(4) : null,
       targetContactId: contactId || null,
@@ -403,65 +393,215 @@ function Session({
       feedbackTags: withFeedback?.tags ?? [],
       revisitAt: withFeedback?.revisitAt ?? null,
       campaignId: data.campaign.id,
-      // Due on their working morning, so the follow-up comes up when they can be reached
-      // A revisit date replaces the usual follow-up task: the company comes back to the queue on that date
-      followUp: rule && !withFeedback?.revisitAt ? { title: rule.taskTitle, taskType: rule.taskType, dueAt: nextLocalMorning(c.timeZone, new Date(), rule.dueInDays) } : null,
+      followUp: followUpTask,
     });
     setBusy(false);
     if (!res.ok) return setError(res.error);
     const auto = res.data!.automations;
-    const who = contact?.name ?? c.name;
-    const message = `${who}: ${result} logged${withFeedback?.rating ? ` (${withFeedback.rating})` : ""}${withFeedback?.revisitAt ? `, back in the queue on ${formatDate(withFeedback.revisitAt)}` : rule ? `, follow-up "${rule.taskTitle}" in ${rule.dueInDays} day${rule.dueInDays === 1 ? "" : "s"}` : ""}${auto.length ? `. ${auto.join(", ")}` : ""}`;
-    // The note went with the call; drop the draft now, before the screen may move on
+    const message = `${who}: ${result} submitted${withFeedback?.rating ? ` (${withFeedback.rating})` : ""}${withFeedback?.revisitAt ? `, back in the queue on ${formatDate(withFeedback.revisitAt)}` : followUpTask ? `, next call ${friendlyDateTime(followUpTask.dueAt)}` : ""}${auto.length ? `. ${auto.join(", ")}` : ""}`;
+    // The note went with the call; drop the draft
     try {
       localStorage.removeItem(draftKey);
     } catch {}
-    if (autoNext) return onLogged(message, false);
 
-    // Stay here: get ready for the next person nobody has tried yet on this visit
+    // Stay on this company (the caller moves on with Next company): get ready for the next person nobody has tried yet
     const nowTried = { ...tried, [contactId]: result };
     setTried(nowTried);
+    setOutcome(null);
+    setFeedback({ rating: null, tags: [], revisitAt: null });
+    setNextAt("");
     setNotes("");
-    setPath("");
     setGatekeeper("");
-    setSeconds(0);
     const next = callable.find((x) => !(x.id in nowTried));
     if (next) {
       setContactId(next.id);
-      // Their own line first, then the number on their contact record, then the company line
-      const own = c.phones.find((p) => p.contactId === next.id && !["Wrong", "Disconnected"].includes(p.status));
-      const raw = next.phone ?? next.mobile;
-      const line = usablePhone(null);
-      if (own) setPhone(`id:${own.id}`);
-      else if (raw) setPhone(`raw:${raw}`);
-      else if (line) setPhone(`id:${line.id}`);
+      setPhone(numberFor(next.id));
     }
-    onLogged(next ? `${message}. Next: ${next.name}` : `${message}. Everyone here has been tried`, true);
+    onLogged(next ? `${message}. Next: ${next.name}` : `${message}. Everyone here has been tried`);
   }
 
-  async function snooze(until: string, label: string) {
-    setError(null);
-    const res = await snoozeMember(data.campaign.id, c.id, until);
-    if (!res.ok) return setError(res.error);
-    onSnoozed(`${c.name}: call again ${label}`);
+  function pickTarget(id: string) {
+    // Picking a person selects their own number; a company number is picked on its own (and clears the person)
+    setContactId(id);
+    setPhone(id ? numberFor(id) : companyFirst);
   }
 
-  // Keyboard: 1–9/0 log an outcome, ← back, → skip (not while typing)
+  // Keyboard: 1–9/0 pick an outcome, Ctrl+Enter submits, ← back, → next company (not while typing)
   const outcomes = data.options.callResult;
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (dialog) return;
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        void submit();
+        return;
+      }
       const el = e.target instanceof Element ? e.target : null;
-      if (dialog || pending || el?.closest("input, textarea, select, [contenteditable], [role=dialog]") || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (el?.closest("input, textarea, select, [contenteditable], [role=dialog]") || e.ctrlKey || e.metaKey || e.altKey) return;
       const i = KEYS.indexOf(e.key);
       if (i >= 0 && outcomes[i]) {
         e.preventDefault();
-        void log(outcomes[i].value);
+        setOutcome(outcomes[i].value);
       } else if (e.key === "ArrowRight") onSkip();
       else if (e.key === "ArrowLeft") onBack();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+  // Company numbers vs people's direct lines. Callers learn which is which on the phone and move numbers between them.
+  const lastTen = (n: string) => n.replace(/\D/g, "").slice(-10);
+  const savedNumbers = new Set(c.phones.map((p) => lastTen(p.number)));
+  const peopleIds = new Set(c.contacts.map((x) => x.id));
+  const fromRow = (p: PhoneRow): Num => ({ key: p.id, value: `id:${p.id}`, source: { phoneId: p.id }, number: p.number, row: p });
+  const directNumbers = (x: QueueCompany["contacts"][number]): Num[] => [
+    ...c.phones.filter((p) => p.contactId === x.id).map(fromRow),
+    ...(["phone", "mobile"] as const)
+      .filter((k) => x[k] && !savedNumbers.has(lastTen(x[k]!)))
+      .map((k) => ({ key: `${x.id}:${k}`, value: `raw:${x[k]}`, source: { contactId: x.id, field: k }, number: x[k]!, label: k === "mobile" ? "Mobile" : "Direct" })),
+  ];
+  // Lines of people who are no longer linked here stay with the company numbers, so nothing disappears
+  const companyNumbers = c.phones.filter((p) => !p.contactId || !peopleIds.has(p.contactId)).map(fromRow);
+
+  async function moveNumber(n: Num, to: string | null) {
+    setError(null);
+    const res = await moveCompanyNumber(c.id, n.source, to);
+    if (!res.ok) return setError(res.error);
+    if (phone === n.value) setPhone("");
+    onChanged(`${formatPhone(n.number)} moved to ${to ? (c.contacts.find((x) => x.id === to)?.name ?? "the person") : "Company numbers"}`);
+  }
+
+  async function saveNumberNote(id: string) {
+    setError(null);
+    const res = await setPhoneNotes(c.id, id, noteText);
+    if (!res.ok) return setError(res.error);
+    setNoteFor(null);
+    onChanged("Number note saved");
+  }
+
+  /** One number: dial it, see its status and notes, fix it, note it, or move it to the company or a person. */
+  const renderNumber = (n: Num, owner: string | null, compact = false) => {
+    const p = n.row;
+    const dead = !!p && ["Wrong", "Disconnected"].includes(p.status);
+    const selected = phone === n.value;
+    const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+    return (
+      <div
+        key={n.key}
+        className={cn(
+          "flex items-start gap-2 rounded-[4px] border text-[13px]",
+          compact ? "mt-1.5 bg-surface px-2 py-1.5" : "px-3 py-2",
+          selected ? "border-link bg-[#f0f9fb]" : "border-line",
+          dead && "opacity-60",
+        )}
+        onClick={(e) => e.preventDefault()}
+      >
+        <input
+          type="radio"
+          name="number"
+          className="mt-1 accent-[var(--link)]"
+          checked={selected}
+          onChange={() => {
+            setPhone(n.value);
+            setContactId(owner ?? "");
+          }}
+          onClick={stop}
+          aria-label={`Use ${formatPhone(n.number)}`}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href={`tel:${n.number}${p?.extension ? `,${p.extension}` : ""}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setContactId(owner ?? "");
+                dial(n.value);
+              }}
+              className="font-medium text-link hover:underline"
+            >
+              <Phone className="mr-1 inline size-3" />
+              {formatPhone(n.number)}
+              {p?.extension ? ` ext. ${p.extension}` : ""}
+            </a>
+            <span className="text-[12px] text-ink-muted">{p?.type ?? n.label}</span>
+            {p && <Pill label={p.status} color={PHONE_STATUS_COLORS[p.status]} />}
+          </div>
+          {p?.ivrPath && <div className="mt-0.5 font-mono text-[12px] text-ink">IVR: {p.ivrPath}</div>}
+          {p && (
+            <div className="text-[12px] text-ink-subtle">
+              {p.contactId && !peopleIds.has(p.contactId) ? `${p.contactName ?? "Someone"}'s line (not linked here) · ` : ""}
+              {p.lastDialedAt ? `last dialed ${friendlyDateTime(p.lastDialedAt)}` : "never dialed"}
+            </div>
+          )}
+          {p?.notes && noteFor !== p.id && (
+            <div className="mt-0.5 flex gap-1 rounded-[3px] bg-[#fdf3e1] px-1.5 py-0.5 text-[12px]">
+              <NotebookPen className="mt-0.5 size-3 shrink-0 text-[#b07a1b]" />
+              <span className="whitespace-pre-line">{p.notes}</span>
+            </div>
+          )}
+          {p && noteFor === p.id && (
+            <div className="mt-1 space-y-1" onClick={stop}>
+              <textarea
+                value={noteText}
+                onChange={(e) => setNoteText(e.target.value)}
+                rows={2}
+                autoFocus
+                placeholder="e.g. Ext 204 reaches the CTO; ask the receptionist for IT"
+                aria-label="Number note"
+                className="w-full rounded-[3px] border border-line-strong bg-surface px-2 py-1 text-[12px] focus:border-link focus:outline-none"
+              />
+              <div className="flex flex-wrap gap-1.5">
+                {!owner && contact && !noteText.includes(contact.name) && (
+                  <Button size="sm" variant="ghost" onClick={() => setNoteText((t) => `${t ? `${t.trimEnd()}\n` : ""}Reaches ${contact.name}${contact.jobTitle ? ` (${contact.jobTitle})` : ""}`)}>
+                    <Plus /> Reaches {contact.name}
+                  </Button>
+                )}
+                <Button size="sm" variant="primary" onClick={() => void saveNumberNote(p.id)}>
+                  Save note
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setNoteFor(null)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]" onClick={stop}>
+            {p && noteFor !== p.id && (
+              <button type="button" className="text-link hover:underline" onClick={() => (setNoteFor(p.id), setNoteText(p.notes ?? ""))}>
+                {p.notes ? "Edit note" : "Add note"}
+              </button>
+            )}
+            {p && !p.extension && (
+              <button type="button" className="text-link hover:underline" onClick={() => setDialog({ kind: "number", phone: p, extension: true })}>
+                Add extension
+              </button>
+            )}
+            {p && (
+              <button type="button" className="text-link hover:underline" onClick={() => setDialog({ kind: "number", phone: p })}>
+                Correct number
+              </button>
+            )}
+            <select
+              value=""
+              onChange={(e) => e.target.value && void moveNumber(n, e.target.value === "company" ? null : e.target.value)}
+              className="h-6 max-w-[170px] rounded-[3px] border border-line bg-surface px-1 text-[12px] text-link"
+              aria-label={`Move ${formatPhone(n.number)}`}
+            >
+              <option value="">Move to…</option>
+              {owner && <option value="company">Company numbers</option>}
+              {[...listed, ...others]
+                .filter((x) => x.id !== owner)
+                .map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name}&apos;s direct line
+                  </option>
+                ))}
+            </select>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const renderPerson = (x: QueueCompany["contacts"][number]) => (
     <label
@@ -478,11 +618,7 @@ function Session({
         className="mt-1 accent-[var(--link)]"
         disabled={x.doNotCall}
         checked={contactId === x.id}
-        onChange={() => {
-          setContactId(x.id);
-          const p = usablePhone(x.id);
-          if (p?.contactId === x.id) setPhone(`id:${p.id}`);
-        }}
+        onChange={() => pickTarget(x.id)}
       />
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-1.5">
@@ -507,12 +643,7 @@ function Session({
           CRT {x.crtCount} · {x.callStatus ?? "Never called"}
           {x.leadStatus ? ` · ${x.leadStatus}` : ""}
         </span>
-        {[x.phone, x.mobile].filter(Boolean).map((n) => (
-          <a key={n} href={`tel:${n}`} onClick={() => (setContactId(x.id), dial(`raw:${n}`))} className="mr-3 text-[12px] text-link hover:underline">
-            <Phone className="mr-0.5 inline size-3" />
-            {formatPhone(n)}
-          </a>
-        ))}
+        {directNumbers(x).map((n) => renderNumber(n, x.id, true))}
         <span className="mt-1 flex gap-3 text-[12px]">
           <button type="button" className="text-link hover:underline" onClick={(e) => (e.preventDefault(), setDialog({ kind: "contact", contact: x }))}>
             Correct info
@@ -580,7 +711,7 @@ function Session({
             </div>
           </div>
           <div className={cn("rounded-[6px] border px-3 py-2 text-right", hours === false ? "border-line bg-surface-muted" : "border-[#00bda5] bg-[#e5f8f6]")}>
-            <div className="text-[20px] font-medium tabular-nums">{localTime(c.timeZone) ?? "--:--"}</div>
+            <div className="text-[20px] font-medium tabular-nums">{c.timeZone ? <LocalTime tz={c.timeZone} /> : "--:--"}</div>
             <div className="text-[11px] text-ink-muted">{c.timeZone ? `${hours === false ? "Outside business hours" : "Business hours"} · ${c.timeZone.split("/").pop()?.replace("_", " ")}` : "Time zone unknown"}</div>
           </div>
         </header>
@@ -589,7 +720,7 @@ function Session({
           <p className="rounded-[4px] bg-[#fdf3e1] px-3 py-2 text-[13px]">
             {forPeople
               ? "Everyone on the list at this company is done (final outcome or out of attempts). Move on to the next company."
-              : `This company has reached the campaign's ${data.campaign.maxAttempts} attempts. Consider Nurture or Not interested on the campaign page, or snooze it.`}
+              : `This company has reached the campaign's ${data.campaign.maxAttempts} attempts. Consider Nurture or Not interested on the campaign page.`}
           </p>
         )}
 
@@ -659,52 +790,22 @@ function Session({
 
           <div>
             <div className="mb-2 flex items-center">
-              <h2 className="flex-1 text-[14px] font-semibold">Numbers ({c.phones.length})</h2>
+              <h2 className="flex-1 text-[14px] font-semibold">Company Numbers ({companyNumbers.length})</h2>
               <Button size="sm" variant="ghost" className="text-link" onClick={() => setDialog({ kind: "number", phone: null })}>
                 <Plus /> Add number
               </Button>
             </div>
+            <p className="mb-1.5 text-[12px] text-ink-subtle">The company&apos;s own lines. People&apos;s direct numbers are under their names; use Move to fix either.</p>
             <div className="space-y-1.5">
-              {c.phones.map((p) => {
-                const dead = ["Wrong", "Disconnected"].includes(p.status);
-                return (
-                  <div key={p.id} className={cn("flex items-start gap-2 rounded-[4px] border px-3 py-2 text-[13px]", phone === `id:${p.id}` ? "border-link bg-[#f0f9fb]" : "border-line", dead && "opacity-60")}>
-                    <input type="radio" name="number" className="mt-1 accent-[var(--link)]" checked={phone === `id:${p.id}`} onChange={() => setPhone(`id:${p.id}`)} aria-label={`Use ${formatPhone(p.number)}`} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <a href={`tel:${p.number}${p.extension ? `,${p.extension}` : ""}`} onClick={() => dial(`id:${p.id}`)} className="font-medium text-link hover:underline">
-                          {formatPhone(p.number)}
-                          {p.extension ? ` ext. ${p.extension}` : ""}
-                        </a>
-                        <span className="text-[12px] text-ink-muted">{p.type}</span>
-                        <Pill label={p.status} color={PHONE_STATUS_COLORS[p.status]} />
-                      </div>
-                      {p.ivrPath && <div className="mt-0.5 font-mono text-[12px] text-ink">IVR: {p.ivrPath}</div>}
-                      <div className="text-[12px] text-ink-subtle">
-                        {p.contactName ? `${p.contactName}'s line` : "Company line"}
-                        {p.lastDialedAt ? ` · last dialed ${friendlyDateTime(p.lastDialedAt)}` : " · never dialed"}
-                      </div>
-                      {p.notes && <div className="text-[12px] text-ink-muted">{p.notes}</div>}
-                      <div className="mt-0.5 flex gap-3 text-[12px]">
-                        {!p.extension && (
-                          <button className="text-link hover:underline" onClick={() => setDialog({ kind: "number", phone: p, extension: true })}>
-                            Add extension
-                          </button>
-                        )}
-                        <button className="text-link hover:underline" onClick={() => setDialog({ kind: "number", phone: p })}>
-                          Correct number
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-              {!c.phones.length && c.phone && (
+              {companyNumbers.map((n) => renderNumber(n, null))}
+              {c.phone && !savedNumbers.has(lastTen(c.phone)) && (
                 <a href={`tel:${c.phone}`} onClick={() => dial(`raw:${c.phone}`)} className="block rounded-[4px] border border-line px-3 py-2 text-[13px] text-link hover:underline">
                   {formatPhone(c.phone)} <span className="text-ink-subtle">(company phone)</span>
                 </a>
               )}
-              {!c.phones.length && !c.phone && <p className="text-[13px] text-ink-subtle">No numbers yet. Add one, or ask research to find them.</p>}
+              {!companyNumbers.length && !(c.phone && !savedNumbers.has(lastTen(c.phone))) && (
+                <p className="text-[13px] text-ink-subtle">No company numbers yet. Add one, or ask research to find them.</p>
+              )}
             </div>
           </div>
         </section>
@@ -740,7 +841,7 @@ function Session({
         </section>
       </div>
 
-      {/* Logger */}
+      {/* Logger: who and which number, then Outcome → Caller notes → Next call date → Submit */}
       <aside className="thin-scroll min-h-0 space-y-3 overflow-y-auto border-t border-line bg-surface-muted px-4 py-4 lg:border-l lg:border-t-0">
         {data.campaign.pitch && (
           <details open className="rounded-[4px] border border-line bg-surface px-3 py-2 text-[13px]">
@@ -749,148 +850,124 @@ function Session({
           </details>
         )}
 
-        <div className="rounded-[4px] border border-line bg-surface px-3 py-2.5 text-[13px]">
-          <div className="text-[12px] text-ink-subtle">Calling</div>
-          <div className="font-medium">{contact ? `${contact.name}${contact.jobTitle ? `, ${contact.jobTitle}` : ""}` : "Company line (no specific target)"}</div>
-          <div className="text-ink-muted">
-            {phoneRow ? `${formatPhone(phoneRow.number)} · ${phoneRow.type}` : phone.startsWith("raw:") ? formatPhone(phone.slice(4)) : "No number chosen"}
-            {phoneRow?.ivrPath ? ` · ${phoneRow.ivrPath}` : ""}
+        <div className="space-y-3 rounded-[6px] border border-line bg-surface p-3" role="group" aria-label="Call feedback">
+          {/* 1. Outcome */}
+          <div>
+            <div className="mb-1.5 text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">1. Outcome</div>
+            <div className="grid grid-cols-2 gap-1.5">
+              {outcomes.map((o, i) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setOutcome((x) => (x === o.value ? null : o.value))}
+                  aria-pressed={outcome === o.value}
+                  className={cn(
+                    "flex min-h-9 items-center gap-1.5 rounded-[3px] border px-2 py-1.5 text-left text-[12.5px] font-medium disabled:opacity-50",
+                    outcomeTone(o.value),
+                    outcome === o.value && "ring-2 ring-link ring-offset-1",
+                    outcome && outcome !== o.value && "opacity-60",
+                  )}
+                >
+                  {KEYS[i] && <kbd className="rounded border border-current/30 px-1 font-mono text-[10px] opacity-70">{KEYS[i]}</kbd>}
+                  <span className="min-w-0 flex-1">{o.label}</span>
+                </button>
+              ))}
+            </div>
+            {outcome && /gatekeeper/i.test(outcome) && (
+              <Select className="mt-1.5" value={gatekeeper} onChange={(e) => setGatekeeper(e.target.value)} aria-label="Gatekeeper type">
+                <option value="">Gatekeeper type --</option>
+                {data.options.gatekeeperType.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </Select>
+            )}
+            {conversation && <FeedbackFields who={contact?.name ?? c.name} value={feedback} onChange={setFeedback} />}
           </div>
-          <div className="mt-2 flex items-center gap-2">
-            <Timer className="size-4 text-ink-subtle" />
-            <span className="font-mono tabular-nums">{duration(seconds)}</span>
-            <Button size="sm" variant="ghost" onClick={() => setRunning((r) => !r)} aria-label={running ? "Pause timer" : "Start timer"}>
-              {running ? <Pause /> : <Play />} {running ? "Pause" : seconds ? "Resume" : "Start timer"}
-            </Button>
-            {seconds > 0 && !running && (
-              <button className="text-[12px] text-link hover:underline" onClick={() => setSeconds(0)}>
-                Reset
-              </button>
+
+          {/* 2. Caller notes */}
+          <div>
+            <div className="mb-1.5 text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">2. Caller notes</div>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              placeholder="Who answered, what they said, next steps"
+              aria-label="Caller notes"
+              className="w-full rounded-[3px] border border-line-strong bg-surface px-2.5 py-2 text-[13px] focus:border-link focus:outline-none"
+            />
+            <div className="flex items-start gap-2">
+              <p className="flex-1 text-[11px] text-ink-subtle">Saved with the call. Your draft is kept if you leave this company.</p>
+              <Button size="sm" variant="ghost" disabled={!notes.trim() || busy} onClick={() => void saveNote()}>
+                Save note only
+              </Button>
+            </div>
+          </div>
+
+          {/* 3. Next call date */}
+          <div>
+            <div className="mb-1.5 text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">3. Next call date {notNow ? "(required for Not now)" : "(optional)"}</div>
+            <div className="mb-1.5 flex flex-wrap gap-1.5">
+              {[
+                ["Tomorrow", 1],
+                ["In 2 days", 2],
+                ["Next week", 5],
+                ["In a month", 22],
+              ].map(([label, days]) => {
+                const v = toLocalInput(nextLocalMorning(c.timeZone, new Date(), days as number));
+                return (
+                  <Button key={label} size="sm" variant={nextAt === v ? "primary" : "secondary"} onClick={() => setNextAt(nextAt === v ? "" : v)}>
+                    {label}
+                  </Button>
+                );
+              })}
+            </div>
+            <Input type="datetime-local" value={nextAt} onChange={(e) => setNextAt(e.target.value)} aria-label="Next call date (Dhaka time)" className="h-8" />
+            <p className={cn("mt-1 text-[11px]", pastNext || (notNow && !nextIso) ? "text-danger" : "text-ink-subtle")}>
+              {pastNext
+                ? "Pick a time in the future."
+                : notNow
+                  ? nextIso
+                    ? `The company rests and comes back to the queue on ${whenBoth(nextIso)}.`
+                    : "Pick when to ask again."
+                  : nextIso
+                    ? `Creates a call task for ${contact?.name ?? c.name} and brings the company back to the queue on ${whenBoth(nextIso)}.`
+                    : "Quick picks are their next working morning. Leave empty to use the follow-up rules."}
+            </p>
+          </div>
+
+          {error && <p className="rounded-[3px] bg-danger-soft px-3 py-2 text-[13px] text-danger">{error}</p>}
+
+          <Button variant="primary" className="w-full justify-center" disabled={!canSubmit} onClick={() => void submit()}>
+            {busy ? "Submitting…" : outcome ? `Submit for ${contact?.name ?? "the company line"}: ${outcome}` : "Submit (pick an outcome first)"}
+          </Button>
+          <label className="flex cursor-pointer items-center gap-2 text-[12px] text-ink-muted">
+            <input type="checkbox" className="accent-[var(--link)]" checked={followUp} onChange={(e) => setFollowUp(e.target.checked)} />
+            Without a next call date, create follow-up tasks from the follow-up rules
+          </label>
+        </div>
+
+        {/* Progress through this company's people; the caller moves on only with Next company */}
+        <div className={cn("rounded-[4px] border px-3 py-2.5 text-[13px]", Object.keys(tried).length && !untried.length ? "border-[#00bda5] bg-[#e5f8f6]" : "border-line bg-surface")}>
+          <div className="mb-1.5">
+            {callable.length ? (
+              <>
+                Tried <strong>{callable.length - untried.length}</strong> of {callable.length} people at {c.name}
+                {untried.length ? ` · still to try: ${untried.map((x) => x.name).join(", ")}` : ". Everyone has been tried."}
+              </>
+            ) : (
+              <>{forPeople ? "Everyone on the list here is done." : `Company line ${"" in tried ? `tried: ${tried[""]}` : "not tried yet"}`}</>
             )}
           </div>
-          {contactId && (
-            <button className="mt-1 text-[12px] text-link hover:underline" onClick={() => setContactId("")}>
-              Log against the company line instead
-            </button>
-          )}
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          <Select value={path} onChange={(e) => setPath(e.target.value)} aria-label="Call path">
-            <option value="">Path --</option>
-            {data.options.callPath.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
-          <Select value={gatekeeper} onChange={(e) => setGatekeeper(e.target.value)} aria-label="Gatekeeper type (for Gatekeeper outcomes)">
-            <option value="">Gatekeeper --</option>
-            {data.options.gatekeeperType.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
-        </div>
-        <div>
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={3}
-            placeholder="Call notes: who answered, what they said, next steps"
-            aria-label="Call notes"
-            className="w-full rounded-[3px] border border-line-strong bg-surface px-2.5 py-2 text-[13px] focus:border-link focus:outline-none"
-          />
-          <div className="flex items-start gap-2">
-            <p className="flex-1 text-[11px] text-ink-subtle">
-              {notes.trim()
-                ? "Saved with the call when you click an outcome below. Your draft is kept if you leave this company."
-                : "Notes are saved with the call outcome and shown under Past attempts and on the company's timeline."}
-            </p>
-            <Button size="sm" variant="secondary" disabled={!notes.trim() || busy} onClick={() => void saveNote()}>
-              Save note only
-            </Button>
-          </div>
-        </div>
-        <label className="flex cursor-pointer items-center gap-2 text-[13px]">
-          <input type="checkbox" className="accent-[var(--link)]" checked={followUp} onChange={(e) => setFollowUp(e.target.checked)} />
-          Create follow-up tasks from the follow-up rules
-        </label>
-        <label className="flex cursor-pointer items-center gap-2 text-[13px]">
-          <input type="checkbox" className="accent-[var(--link)]" checked={autoNext} onChange={(e) => onAutoNext(e.target.checked)} />
-          Go to the next company after each outcome
-        </label>
-
-        {/* Progress through this company's people, and the way on when done */}
-        {!autoNext && (Object.keys(tried).length > 0 || callable.length > 1) && (
-          <div className={cn("rounded-[4px] border px-3 py-2.5 text-[13px]", Object.keys(tried).length && !untried.length ? "border-[#00bda5] bg-[#e5f8f6]" : "border-line bg-surface")}>
-            <div className="mb-1.5">
-              {callable.length ? (
-                <>
-                  Tried <strong>{callable.length - untried.length}</strong> of {callable.length} people at {c.name}
-                  {untried.length ? ` · still to try: ${untried.map((x) => x.name).join(", ")}` : ". Everyone has been tried."}
-                </>
-              ) : (
-                <>{forPeople ? "Everyone on the list here is done." : `Company line tried${"" in tried ? `: ${tried[""]}` : ""}`}</>
-              )}
-            </div>
-            <Button size="sm" variant={Object.keys(tried).length && !untried.length ? "primary" : "secondary"} className="w-full justify-center" disabled={!hasNext} onClick={onSkip}>
-              Next company <ArrowRight />
-            </Button>
-          </div>
-        )}
-
-        {error && <p className="rounded-[3px] bg-danger-soft px-3 py-2 text-[13px] text-danger">{error}</p>}
-
-        {pending && <FeedbackPanel result={pending} busy={busy} who={contact?.name ?? c.name} onLog={(fb) => void log(pending, fb)} onCancel={() => setPending(null)} />}
-
-        <div>
-          <div className="mb-1.5 flex items-center justify-between text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">
-            {autoNext ? "Outcome: one click logs it and moves on" : "Outcome: one click logs it, then the next person"}
-          </div>
-          <div className="grid grid-cols-2 gap-1.5">
-            {outcomes.map((o, i) => {
-              const rule = followUp ? data.followUpRules.find((r) => r.callResult === o.value) : undefined;
-              return (
-                <Tooltip
-                  key={o.value}
-                  content={rule ? `Also creates "${rule.taskTitle}", due their morning in ${rule.dueInDays} working day${rule.dueInDays === 1 ? "" : "s"}` : "Logs the call"}
-                >
-                  <button
-                    disabled={busy}
-                    onClick={() => void log(o.value)}
-                    className={cn("flex min-h-9 items-center gap-1.5 rounded-[3px] border px-2 py-1.5 text-left text-[12.5px] font-medium disabled:opacity-50", outcomeTone(o.value))}
-                  >
-                    {KEYS[i] && <kbd className="rounded border border-current/30 px-1 font-mono text-[10px] opacity-70">{KEYS[i]}</kbd>}
-                    <span className="min-w-0 flex-1">{o.label}</span>
-                  </button>
-                </Tooltip>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="rounded-[4px] border border-line bg-surface px-3 py-2.5 text-[13px]">
-          <div className="mb-1.5 font-medium">Call later without logging</div>
-          <div className="flex flex-wrap gap-1.5">
-            <Button size="sm" variant="secondary" onClick={() => void snooze(new Date(Date.now() + 36e5).toISOString(), "in 1 hour")}>
-              In 1 hour
-            </Button>
-            <Button size="sm" variant="secondary" onClick={() => void snooze(nextLocalMorning(c.timeZone), "on their next working morning")}>
-              Their next morning
-            </Button>
-          </div>
-          <div className="mt-2 flex gap-1.5">
-            <Input type="datetime-local" value={snoozeAt} onChange={(e) => setSnoozeAt(e.target.value)} aria-label="Call again at (Dhaka time)" className="h-8" />
-            <Button size="sm" variant="secondary" disabled={!snoozeAt} onClick={() => void snooze(fromLocalInput(snoozeAt), friendlyDateTime(fromLocalInput(snoozeAt)))}>
-              Set
-            </Button>
-          </div>
+          <Button size="sm" variant={Object.keys(tried).length && !untried.length ? "primary" : "secondary"} className="w-full justify-center" disabled={!hasNext} onClick={onSkip}>
+            Next company <ArrowRight />
+          </Button>
         </div>
 
         <p className="text-[11px] text-ink-subtle">
-          Keys: 1–9, 0 log an outcome · → next company · ← previous. Clicking a number starts the call timer.
+          Keys: 1–9, 0 pick an outcome · Ctrl+Enter submits · → next company · ← previous.
         </p>
       </aside>
     </>
@@ -927,37 +1004,27 @@ function CallItem({ a }: { a: QueueCompany["calls"][number] }) {
   );
 }
 
+type PhoneRow = QueueCompany["phones"][number];
+/** A number shown on the page: a saved number, or one typed on a contact record */
+type Num = { key: string; value: string; source: NumberSource; number: string; row?: PhoneRow; label?: string };
+
 type Feedback = { rating: string | null; tags: string[]; revisitAt: string | null };
 
-/** Date N months from now, as yyyy-mm-dd. */
-function monthsAhead(n: number) {
-  const d = new Date();
-  d.setMonth(d.getMonth() + n);
-  return d.toISOString().slice(0, 10);
-}
-
-/** Five-second feedback after a real conversation: how promising, what we learned, when to ask again. */
-function FeedbackPanel({ result, who, busy, onLog, onCancel }: { result: string; who: string; busy: boolean; onLog: (fb: Feedback | null) => void; onCancel: () => void }) {
-  const [rating, setRating] = useState<string | null>(null);
-  const [tags, setTags] = useState<string[]>([]);
-  const [revisit, setRevisit] = useState("");
-  const notNow = tags.includes("not_now");
-  const toggle = (k: string) => setTags((t) => (t.includes(k) ? t.filter((x) => x !== k) : [...t, k]));
+/** Quick feedback after a real conversation: how promising, and what we learned. "Not now" uses the next call date as the revisit date. */
+function FeedbackFields({ who, value, onChange }: { who: string; value: Feedback; onChange: (v: Feedback) => void }) {
+  const toggle = (k: string) => onChange({ ...value, tags: value.tags.includes(k) ? value.tags.filter((x) => x !== k) : [...value.tags, k] });
   return (
-    <div className="space-y-2.5 rounded-[6px] border-2 border-link bg-surface p-3 text-[13px] shadow-sm" role="group" aria-label="Caller feedback">
-      <div>
-        <div className="font-semibold">Quick feedback: {result}</div>
-        <div className="text-[12px] text-ink-muted">How promising is {who}? This decides who to chase and who to nurture.</div>
-      </div>
+    <div className="mt-2 space-y-2 rounded-[4px] bg-surface-muted p-2.5 text-[13px]">
+      <div className="text-[12px] text-ink-muted">How promising is {who}? This decides who to chase and who to nurture.</div>
       <div className="grid grid-cols-3 gap-1.5">
         {FEEDBACK_RATINGS.map((r) => (
           <Tooltip key={r.value} content={r.help}>
             <button
               type="button"
-              onClick={() => setRating((x) => (x === r.value ? null : r.value))}
-              aria-pressed={rating === r.value}
-              className={cn("rounded-[4px] border-2 py-1.5 font-semibold", rating === r.value ? "text-white" : "bg-surface hover:bg-surface-hover")}
-              style={{ borderColor: r.color, ...(rating === r.value ? { background: r.color } : { color: r.color }) }}
+              onClick={() => onChange({ ...value, rating: value.rating === r.value ? null : r.value })}
+              aria-pressed={value.rating === r.value}
+              className={cn("rounded-[4px] border-2 py-1 font-semibold", value.rating === r.value ? "text-white" : "bg-surface hover:bg-surface-hover")}
+              style={{ borderColor: r.color, ...(value.rating === r.value ? { background: r.color } : { color: r.color }) }}
             >
               {r.value}
             </button>
@@ -967,42 +1034,11 @@ function FeedbackPanel({ result, who, busy, onLog, onCancel }: { result: string;
       <div className="grid grid-cols-1 gap-1">
         {FEEDBACK_TAGS.map((t) => (
           <label key={t.key} className="flex cursor-pointer items-center gap-2">
-            <input type="checkbox" className="accent-[var(--link)]" checked={tags.includes(t.key)} onChange={() => toggle(t.key)} />
+            <input type="checkbox" className="accent-[var(--link)]" checked={value.tags.includes(t.key)} onChange={() => toggle(t.key)} />
             {t.label}
           </label>
         ))}
       </div>
-      {notNow && (
-        <div className="rounded-[4px] bg-surface-muted p-2">
-          <div className="mb-1 text-[12px] font-medium">Ask again on</div>
-          <div className="flex flex-wrap gap-1.5">
-            {[1, 3, 6].map((m) => (
-              <Button key={m} size="sm" variant={revisit === monthsAhead(m) ? "primary" : "secondary"} onClick={() => setRevisit(monthsAhead(m))}>
-                {m} month{m === 1 ? "" : "s"}
-              </Button>
-            ))}
-            <Input type="date" value={revisit} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setRevisit(e.target.value)} className="h-8 w-[150px]" aria-label="Revisit date" />
-          </div>
-          <div className="mt-1 text-[11px] text-ink-subtle">The company leaves the queue and comes back on this date.</div>
-        </div>
-      )}
-      <div className="flex flex-wrap gap-1.5">
-        <Button
-          size="sm"
-          variant="primary"
-          disabled={busy || (notNow && !revisit)}
-          onClick={() => onLog({ rating, tags, revisitAt: notNow && revisit ? new Date(`${revisit}T09:00:00`).toISOString() : null })}
-        >
-          Save feedback &amp; log
-        </Button>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => onLog(null)}>
-          Log without feedback
-        </Button>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>
-          Cancel
-        </Button>
-      </div>
-      {notNow && !revisit && <p className="text-[11px] text-danger">Pick when to ask again, or untick &ldquo;Not now&rdquo;.</p>}
     </div>
   );
 }

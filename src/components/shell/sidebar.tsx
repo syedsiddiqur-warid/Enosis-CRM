@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowRightLeft,
   BarChart3,
   Building2,
   CheckSquare,
@@ -37,10 +38,12 @@ const SECTIONS = [
   {
     title: "Sales",
     items: [
+      // In the order work flows: research → handover → campaigns → calling → follow-up
+      { href: "/research", label: "Research Queue", icon: FlaskConical },
+      { href: "/handover", label: "Handover", icon: ArrowRightLeft },
       { href: "/campaigns", label: "Campaigns", icon: Megaphone },
       { href: "/prospecting", label: "Prospecting", icon: PhoneCall },
       { href: "/follow-ups", label: "Follow-ups", icon: Target },
-      { href: "/research", label: "Research Queue", icon: FlaskConical },
     ],
   },
   { title: "Reports", items: [{ href: "/dashboards", label: "Dashboards", icon: BarChart3 }] },

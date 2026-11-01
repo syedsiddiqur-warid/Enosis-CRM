@@ -528,7 +528,7 @@ export function ImportWizard({
                 </div>
                 <div>
                   <Label htmlFor="imp-batch">Batch number {object === "CONTACT" ? "(new companies)" : ""}</Label>
-                  <Input id="imp-batch" value={options.batchNumber ?? ""} onChange={(e) => setOptions({ ...options, batchNumber: e.target.value || null })} placeholder="e.g. B-18" maxLength={40} />
+                  <Input id="imp-batch" value={options.batchNumber ?? ""} onChange={(e) => setOptions({ ...options, batchNumber: e.target.value || null })} placeholder="Empty: date + file name" maxLength={40} />
                 </div>
               </div>
               <label className="flex cursor-pointer items-start gap-2">

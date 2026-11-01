@@ -119,6 +119,7 @@ export function ResearchList({ data, setParams, onMessage }: { data: ResearchDat
     const column = moveTo as ResearchColumn;
     const list = ids();
     let failed = 0;
+    const reasons: string[] = [];
     setBusy({ label: "Moving", done: 0, total: list.length });
     // Each move updates several fields and the lead journey, so send 25 at a time
     await inChunks(
@@ -127,12 +128,16 @@ export function ResearchList({ data, setParams, onMessage }: { data: ResearchDat
       async (chunk) => {
         const res = await moveResearchCards(chunk, column);
         failed += res.ok ? res.data!.failed : chunk.length;
+        if (res.ok) reasons.push(...res.data!.reasons);
+        else reasons.push(res.error);
       },
       (done) => setBusy((b) => (b ? { ...b, done } : b)),
     );
     setBusy(null);
     const label = RESEARCH_COLUMNS.find((c) => c.id === column)!.label;
-    onMessage(`${(list.length - failed).toLocaleString()} companies moved to ${label}${failed ? `, ${failed} failed` : ""}`);
+    // The checklist's reason, e.g. "Not ready to call yet. Missing: Time zone (12)"
+    const why = [...new Set(reasons.map((r) => r.replace(/ \(\d+\)$/, "")))].slice(0, 2).join("; ");
+    onMessage(`${(list.length - failed).toLocaleString()} companies moved to ${label}${failed ? `, ${failed} not moved${why ? `: ${why}` : ""}` : ""}`);
     clear();
     router.refresh();
   }

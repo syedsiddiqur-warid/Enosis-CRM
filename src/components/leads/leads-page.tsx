@@ -7,11 +7,11 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { ReasonDialog } from "./reason-dialog";
-import { Pill, UserAvatar } from "@/components/index/values";
+import { LocalTime, Pill, UserAvatar } from "@/components/index/values";
 import { Pager } from "@/components/research/research-list";
 import { Button, Input, Label, Select } from "@/components/ui/button";
 import { Checkbox, Dialog, DialogContent } from "@/components/ui/overlays";
-import { formatDate, localTime } from "@/lib/crm/dates";
+import { formatDate } from "@/lib/crm/dates";
 import { FEEDBACK_RATINGS } from "@/lib/crm/follow-up";
 import { createLeads, createLeadsFromCalls, deleteLeads, moveLeads, restoreLeads, updateLeads } from "@/lib/crm/lead-actions";
 import { LEAD_PAGE, STALE_DAYS, type LeadRow, type LeadsData } from "@/lib/crm/lead-loader";
@@ -304,7 +304,7 @@ function LeadCardBody({ l, data }: { l: LeadRow; data: LeadsData }) {
       <div className="mt-1.5 flex items-center gap-2 text-[12px] text-ink-subtle">
         {owner ? <UserAvatar user={owner} size={18} /> : <span>Unassigned</span>}
         <span title="Days in this stage">{ageSince(l.stageEnteredAt)} in stage</span>
-        {l.contact.timeZone && <span className="ml-auto">{localTime(l.contact.timeZone)}</span>}
+        {l.contact.timeZone && <span className="ml-auto"><LocalTime tz={l.contact.timeZone} /></span>}
       </div>
     </>
   );
@@ -490,7 +490,7 @@ function LeadList({
                     )}
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-ink-muted">{l.campaign ? <Link href={`/campaigns/${l.campaign.id}`} className="hover:underline">{l.campaign.name}</Link> : (l.source ?? "--")}</td>
-                  <td className="whitespace-nowrap px-3 py-2 text-ink-muted">{localTime(l.contact.timeZone) ?? "--"}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-ink-muted">{l.contact.timeZone ? <LocalTime tz={l.contact.timeZone} /> : "--"}</td>
                   <td className="whitespace-nowrap px-3 py-2">
                     {isOpen(l.stage) && (
                       <Button size="sm" variant="outline" onClick={() => onMove([l.id], "Qualified")}>
