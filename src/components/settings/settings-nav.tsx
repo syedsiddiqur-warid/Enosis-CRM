@@ -26,7 +26,6 @@ const SECTIONS: { title: string; items: { href: string; label: string; later?: s
     title: "Customization",
     items: [
       { href: "#layouts", label: "Record layouts", later: "Record layout editor: build step 11" },
-      { href: "#pipelines", label: "Pipelines", later: "Deal pipelines: build step 7" },
       { href: "#permissions", label: "Roles & permissions", later: "Permission sets: build step 11" },
       { href: "#automation", label: "Automation rules", later: "Workflow rule builder: build step 11" },
       { href: "#branding", label: "Branding", later: "Logo and colors: build step 11" },

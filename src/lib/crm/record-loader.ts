@@ -125,7 +125,6 @@ export async function loadRecord(object: CrmObject, id: string, userId: string) 
   let contacts: { id: string; name: string; jobTitle: string | null; email: string | null; inDbnd: string | null; crtCount: number; timeZone: string | null; phone: string | null; mobile: string | null; labels: string[] }[] = [];
   let activityWhere: Prisma.ActivityWhereInput;
   let phoneWhere: Prisma.PhoneNumberWhereInput;
-  let dealWhere: Prisma.DealWhereInput;
   let companyEmails: string[] = [];
   let industry: string | null = null;
   let technologies: string[] = [];
@@ -151,7 +150,6 @@ export async function loadRecord(object: CrmObject, id: string, userId: string) 
     };
     activityWhere = { deletedAt: null, contacts: { some: { contactId: id } } };
     phoneWhere = { OR: [{ contactId: id }, ...(primary ? [{ companyId: primary.id, contactId: null }] : [])] };
-    dealWhere = { deletedAt: null, contacts: { some: { contactId: id } } };
     industry = primary?.industry ?? null;
     technologies = primary?.technologies ?? [];
   } else {
@@ -171,7 +169,6 @@ export async function loadRecord(object: CrmObject, id: string, userId: string) 
       OR: [{ companies: { some: { companyId: id } } }, { type: { not: "SYSTEM" }, contacts: { some: { contact: { companies: { some: { companyId: id } } } } } }],
     };
     phoneWhere = { companyId: id };
-    dealWhere = { deletedAt: null, companies: { some: { companyId: id } } };
     industry = co.industry;
     technologies = co.technologies;
   }
@@ -189,13 +186,12 @@ export async function loadRecord(object: CrmObject, id: string, userId: string) 
     (await db.campaign.findMany({ where: { id: { in: journeyEvents.map((e) => e.campaignId).filter((x): x is string => !!x) } }, select: { id: true, name: true } })).map((c) => [c.id, c.name]),
   );
 
-  const [activities, phones, deals, leads, caseStudies, segments] = await Promise.all([
+  const [activities, phones, leads, caseStudies, segments] = await Promise.all([
     db.activity.findMany({ where: activityWhere, include: activityInclude, orderBy: { occurredAt: "desc" }, take: ACTIVITY_LIMIT }),
     db.phoneNumber.findMany({ where: phoneWhere, include: { contact: { select: { firstName: true, lastName: true, email: true } } }, orderBy: { createdAt: "asc" } }),
-    db.deal.findMany({ where: dealWhere, include: { stage: { select: { name: true, color: true } } }, orderBy: { createdAt: "desc" } }),
     db.lead.findMany({
       where: { deletedAt: null, ...(object === "CONTACT" ? { contactId: id } : { companyId: id }) },
-      select: { id: true, stage: true, label: true, touches: true, lastTouchAt: true, ownerId: true, disqualifyReason: true, dealId: true, contact: { select: { id: true, firstName: true, lastName: true, email: true } } },
+      select: { id: true, stage: true, label: true, touches: true, lastTouchAt: true, ownerId: true, disqualifyReason: true, contact: { select: { id: true, firstName: true, lastName: true, email: true } } },
       orderBy: { createdAt: "desc" },
     }),
     industry || technologies.length
@@ -255,8 +251,7 @@ export async function loadRecord(object: CrmObject, id: string, userId: string) 
       contactId: p.contactId,
       contactName: p.contact ? fullName(p.contact) : null,
     })),
-    deals: deals.map((d) => ({ id: d.id, name: d.name, amount: d.amount?.toNumber() ?? null, closeDate: iso(d.closeDate), stage: d.stage.name, stageColor: d.stage.color })),
-    leads: leads.map((l) => ({ id: l.id, stage: l.stage, label: l.label, touches: l.touches, lastTouchAt: iso(l.lastTouchAt), ownerId: l.ownerId, disqualifyReason: l.disqualifyReason, dealId: l.dealId, contact: { id: l.contact.id, name: fullName(l.contact) } })),
+    leads: leads.map((l) => ({ id: l.id, stage: l.stage, label: l.label, touches: l.touches, lastTouchAt: iso(l.lastTouchAt), ownerId: l.ownerId, disqualifyReason: l.disqualifyReason, contact: { id: l.contact.id, name: fullName(l.contact) } })),
     caseStudies: scored,
     segments,
     options: {

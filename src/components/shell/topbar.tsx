@@ -1,7 +1,7 @@
 "use client";
 
 import { Command } from "cmdk";
-import { Bell, Building2, Handshake, Phone, Plus, Search, Settings, Sparkles, UserRound } from "lucide-react";
+import { Bell, Building2, Phone, Plus, Search, Settings, Sparkles, UserRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -17,15 +17,15 @@ import {
 import { formatPhone, initials } from "@/lib/utils";
 
 interface SearchHit {
-  type: "contact" | "company" | "deal" | "phone";
+  type: "contact" | "company" | "phone";
   id: string;
   title: string;
   subtitle?: string;
   href: string;
 }
 
-const HIT_ICON = { contact: UserRound, company: Building2, deal: Handshake, phone: Phone };
-const HIT_GROUP = { contact: "Contacts", company: "Companies", deal: "Deals", phone: "Phone numbers" };
+const HIT_ICON = { contact: UserRound, company: Building2, phone: Phone };
+const HIT_GROUP = { contact: "Contacts", company: "Companies", phone: "Phone numbers" };
 
 export function TopBar({ user, workspaceName, signOutAction }: { user: { name?: string | null; email?: string | null }; workspaceName: string; signOutAction: () => Promise<void> }) {
   const router = useRouter();
@@ -99,7 +99,7 @@ export function TopBar({ user, workspaceName, signOutAction }: { user: { name?: 
                   value={q}
                   onValueChange={setQ}
                   onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
-                  placeholder="Search contacts, companies, deals, phone numbers"
+                  placeholder="Search contacts, companies, phone numbers"
                   className="h-10 flex-1 bg-transparent text-[14px] outline-none placeholder:text-ink-subtle"
                 />
               </div>
@@ -152,7 +152,6 @@ export function TopBar({ user, workspaceName, signOutAction }: { user: { name?: 
             <DropdownMenuLabel>Create</DropdownMenuLabel>
             <DropdownMenuItem onSelect={() => router.push("/contacts?create=1")}>Contact</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => router.push("/companies?create=1")}>Company</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => router.push("/deals")}>Deal</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => router.push("/tasks")}>Task</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => router.push("/prospecting")}>Call log</DropdownMenuItem>
           </DropdownMenuContent>

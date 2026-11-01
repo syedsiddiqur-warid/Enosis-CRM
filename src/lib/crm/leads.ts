@@ -4,7 +4,7 @@ export const LEAD_STAGES = [
   { value: "New", color: "#00a4bd", help: "Not worked yet" },
   { value: "Attempting", color: "#f5a623", help: "Calling, not reached yet" },
   { value: "Connected", color: "#6a78d1", help: "Spoke to them, finding out if there is a fit" },
-  { value: "Qualified", color: "#00a38d", help: "Real opportunity, handed over as a deal" },
+  { value: "Qualified", color: "#00a38d", help: "Real opportunity: interested and a fit" },
   { value: "Disqualified", color: "#99afc4", help: "No fit, or said no" },
 ] as const;
 export type LeadStage = (typeof LEAD_STAGES)[number]["value"];
@@ -34,7 +34,7 @@ export const LEAD_STATUS_FOR_STAGE: Record<LeadStage, string> = {
   New: "New",
   Attempting: "Attempted to contact",
   Connected: "Connected",
-  Qualified: "Open Deal",
+  Qualified: "In progress",
   Disqualified: "Unqualified",
 };
 

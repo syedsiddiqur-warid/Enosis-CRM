@@ -1,13 +1,12 @@
 "use client";
 
 // Leads: people being worked toward a sales conversation, as a board by stage or a list.
-// New → Attempting → Connected move with calls; Qualified creates a deal; Disqualified needs a reason.
+// New → Attempting → Connected move with calls; Qualified and Disqualified are people's decisions (disqualifying needs a reason).
 import { AlertTriangle, Columns3, History, List, Plus, Search, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
-import { CreateDealDialog } from "@/components/deals/deal-dialog";
-import { ReasonDialog } from "@/components/deals/reason-dialog";
+import { ReasonDialog } from "./reason-dialog";
 import { Pill, UserAvatar } from "@/components/index/values";
 import { Pager } from "@/components/research/research-list";
 import { Button, Input, Label, Select } from "@/components/ui/button";
@@ -40,7 +39,6 @@ export function LeadsPage({ data }: { data: LeadsData }) {
   const [pending, start] = useTransition();
   const [q, setQ] = useState(data.filters.q);
   const [message, setMessage] = useState<{ text: string; undo?: () => void } | null>(null);
-  const [qualifying, setQualifying] = useState<LeadRow | null>(null);
   const [disqualifying, setDisqualifying] = useState<string[] | null>(null);
   const [creating, setCreating] = useState(false);
   const [moved, setMoved] = useState<Record<string, string>>({});
@@ -74,14 +72,8 @@ export function LeadsPage({ data }: { data: LeadsData }) {
       if (res.ok) router.refresh();
     });
 
-  /** Move one or more leads; Qualified opens the deal form, Disqualified asks why. */
+  /** Move one or more leads; Disqualified asks why. */
   const move = (ids: string[], stage: string, reason?: string) => {
-    if (stage === "Qualified") {
-      const lead = rows.find((r) => r.id === ids[0]);
-      if (ids.length > 1) return setMessage({ text: "Qualify leads one at a time: each becomes its own deal" });
-      if (lead) setQualifying(lead);
-      return;
-    }
     if (stage === "Disqualified" && !reason) return setDisqualifying(ids);
     setMoved((m) => ({ ...m, ...Object.fromEntries(ids.map((id) => [id, stage])) }));
     start(async () => {
@@ -108,7 +100,7 @@ export function LeadsPage({ data }: { data: LeadsData }) {
           <h1 className="text-[22px] font-medium">Leads</h1>
           <p className="mt-1 max-w-[820px] text-[13px] text-ink-muted">
             People you are working toward a sales conversation. Calls move leads from <strong>New</strong> to <strong>Attempting</strong> to <strong>Connected</strong>, and a good conversation
-            opens a lead automatically. <strong>Qualify</strong> a lead to turn it into a deal, or <strong>disqualify</strong> it with a reason.
+            opens a lead automatically. <strong>Qualify</strong> a lead when it is a real opportunity (its company moves to Opportunity), or <strong>disqualify</strong> it with a reason.
           </p>
         </div>
         <div className="flex overflow-hidden rounded-[3px] border border-line-strong" role="group" aria-label="View">
@@ -260,23 +252,6 @@ export function LeadsPage({ data }: { data: LeadsData }) {
           }}
         />
       )}
-      {qualifying && (
-        <CreateDealDialog
-          defaults={{
-            company: qualifying.company ? { id: qualifying.company.id, name: qualifying.company.name } : null,
-            contactIds: [qualifying.contact.id],
-            leadId: qualifying.id,
-            name: `${qualifying.company?.name ?? qualifying.contact.name} – Staff Augmentation`,
-            sourceCampaign: qualifying.campaign?.name ?? null,
-          }}
-          onClose={() => setQualifying(null)}
-          onCreated={(id, m) => {
-            setQualifying(null);
-            setMessage({ text: m });
-            router.push(`/deals/${id}`);
-          }}
-        />
-      )}
       {disqualifying && (
         <ReasonDialog
           title={disqualifying.length === 1 ? "Disqualify lead" : `Disqualify ${disqualifying.length} leads`}
@@ -323,14 +298,8 @@ function LeadCardBody({ l, data }: { l: LeadRow; data: LeadsData }) {
         <div className={cn("mt-1 truncate text-[12px]", !l.next ? "text-[#c93a41]" : overdue ? "font-medium text-danger" : "text-ink-muted")}>
           {l.next ? `Next: ${l.next.label}${l.next.at ? ` · ${formatDate(l.next.at)}` : ""}` : "No next step"}
         </div>
-      ) : l.stage === "Disqualified" ? (
-        l.disqualifyReason && <div className="mt-1 text-[12px] text-ink-muted">{l.disqualifyReason}</div>
       ) : (
-        l.deal && (
-          <Link href={`/deals/${l.deal.id}`} className="mt-1 block truncate text-[12px] text-link hover:underline">
-            Deal: {l.deal.name}
-          </Link>
-        )
+        l.stage === "Disqualified" && l.disqualifyReason && <div className="mt-1 text-[12px] text-ink-muted">{l.disqualifyReason}</div>
       )}
       <div className="mt-1.5 flex items-center gap-2 text-[12px] text-ink-subtle">
         {owner ? <UserAvatar user={owner} size={18} /> : <span>Unassigned</span>}
@@ -383,7 +352,7 @@ function Board({ data, rows, onMove }: { data: LeadsData; rows: LeadRow[]; onMov
                 </article>
               ))}
               {total > items.length && <p className="px-1 py-2 text-center text-[12px] text-ink-subtle">Showing {items.length} of {total.toLocaleString()}. Use the list view for the rest.</p>}
-              {!items.length && <p className="px-1 py-4 text-center text-[12px] text-ink-subtle">{stage.value === "Qualified" ? "Drop a lead here to create its deal" : "Drop leads here"}</p>}
+              {!items.length && <p className="px-1 py-4 text-center text-[12px] text-ink-subtle">Drop leads here</p>}
             </div>
           </section>
         );
@@ -420,7 +389,7 @@ function LeadList({
           <span className="mx-1 h-5 w-px bg-line" />
           <Select className="h-7 w-[150px]" value="" onChange={(e) => e.target.value && onMove(ids, e.target.value)} aria-label="Move to stage">
             <option value="">Move to stage…</option>
-            {LEAD_STAGES.filter((s) => s.value !== "Qualified").map((s) => (
+            {LEAD_STAGES.map((s) => (
               <option key={s.value}>{s.value}</option>
             ))}
           </Select>
@@ -516,10 +485,6 @@ function LeadList({
                         <div className="truncate">{l.next.label}</div>
                         <div className="text-[12px]">{l.next.at ? `${overdue ? "Overdue · " : ""}${formatDate(l.next.at)}` : ""}</div>
                       </>
-                    ) : l.deal ? (
-                      <Link href={`/deals/${l.deal.id}`} className="text-link hover:underline">
-                        Deal: {l.deal.name}
-                      </Link>
                     ) : (
                       <span className={isOpen(l.stage) ? "text-[#c93a41]" : "text-ink-subtle"}>{isOpen(l.stage) ? "No next step" : "--"}</span>
                     )}

@@ -14,7 +14,7 @@ import { cn, formatPhone, phoneHref, splitPhone } from "@/lib/utils";
 import { deletePhoneNumber, savePhoneNumber, setPhoneStatus, type PhoneInput } from "@/lib/crm/phone-actions";
 import { saveCompanyEmails } from "@/lib/crm/email-actions";
 import { CampaignsCard, LeadJourneyCard, SignalsCard } from "./company-cards";
-import { DealsCard, LeadsCard } from "./deal-lead-cards";
+import { LeadsCard } from "./leads-card";
 import { PhoneDialog } from "./phone-dialog";
 import { useRecord } from "./record-context";
 import { CARD_ACCENTS, CardGear, RecordCard } from "./record-ui";
@@ -35,13 +35,8 @@ export function RightColumn() {
       {cards.map((card) => {
         if (card.kind === "association" && card.object === "COMPANY" && data.object === "CONTACT") return <CompaniesCard key={card.id} card={card} />;
         if (card.kind === "association" && card.object === "CONTACT" && data.object === "COMPANY") return <ContactsCard key={card.id} card={card} />;
-        if (card.kind === "association" && card.object === "DEAL")
-          return (
-            <Fragment key={card.id}>
-              <LeadsCard />
-              <DealsCard card={card} />
-            </Fragment>
-          );
+        // The layout's old Deals slot now holds the Leads card (deals aren't tracked)
+        if (card.kind === "association" && card.object === "DEAL") return <LeadsCard key={card.id} />;
         // Company emails sit right under Company numbers
         if (card.kind === "phone_numbers")
           return data.object === "COMPANY" ? (

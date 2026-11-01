@@ -1,13 +1,15 @@
 "use server";
 
 // Leads: open them for people, move them through New → Attempting → Connected → Qualified / Disqualified,
-// assign, label and delete. Qualifying happens by creating a deal (deal-actions.createDeal with leadId).
+// assign, label and delete.
 import type { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/auth";
 import { db } from "@/lib/db";
 import { FEEDBACK_RATINGS } from "./follow-up";
+import { STAGE } from "./journey";
 import { leadAudit, openLeads, syncLifecycle, type NewLead } from "./lead-sync";
+import { advanceJourney } from "./record-writes";
 import { DISQUALIFY_REASONS, LEAD_SOURCES, LEAD_STAGE_NAMES, LEAD_STATUS_FOR_STAGE, LEAD_TYPES, OPEN_LEAD_STAGES, isConversation, type LeadStage } from "./leads";
 
 type Result<T = undefined> = { ok: true; data?: T } | { ok: false; error: string };
@@ -105,34 +107,45 @@ export async function createLeadsFromCalls(): Promise<Result<{ created: number }
   }
 }
 
-/** Move leads to a stage. Disqualifying needs a reason; qualifying is done by creating a deal. */
+/** Move leads to a stage. Disqualifying needs a reason; qualifying moves the person to SQL and the company's journey to Opportunity. */
 export async function moveLeads(ids: string[], stage: string, reason?: string): Promise<Result<{ moved: number }>> {
   try {
     const user = await requireUser();
     if (!LEAD_STAGE_NAMES.includes(stage as LeadStage)) throw new Error("Unknown lead stage");
-    if (stage === "Qualified") throw new Error("Create a deal to qualify a lead");
     const why = reason?.trim() || null;
     if (stage === "Disqualified" && !why) throw new Error("Say why the lead is disqualified");
     if (why && stage === "Disqualified" && !(DISQUALIFY_REASONS as readonly string[]).includes(why)) throw new Error("Unknown reason");
-    const leads = await db.lead.findMany({ where: { id: { in: ids }, deletedAt: null } });
-    let moved = 0;
-    for (const l of leads) {
-      if (l.stage === stage) continue;
-      const closing = stage === "Disqualified";
-      await db.lead.update({
-        where: { id: l.id },
-        data: { stage, stageEnteredAt: new Date(), closedAt: closing ? new Date() : null, disqualifyReason: closing ? why : null, ...(closing ? {} : { dealId: null }) },
+    const qualifying = stage === "Qualified";
+    const now = new Date();
+    const data = { stage, stageEnteredAt: now, closedAt: stage === "Disqualified" || qualifying ? now : null, disqualifyReason: stage === "Disqualified" ? why : null };
+    // Bulk moves can cover thousands of leads, so write in batches rather than one lead at a time
+    const toMove = await db.lead.findMany({
+      where: { id: { in: ids }, deletedAt: null, stage: { not: stage } },
+      select: { id: true, stage: true, contactId: true, companyId: true, disqualifyReason: true },
+    });
+    for (let i = 0; i < toMove.length; i += 1000) {
+      const chunk = toMove.slice(i, i + 1000);
+      await db.lead.updateMany({ where: { id: { in: chunk.map((l) => l.id) } }, data });
+      await db.auditLog.createMany({
+        data: chunk.map((l) => ({
+          objectType: "LEAD" as const,
+          recordId: l.id,
+          action: "update",
+          changes: { stage: { from: l.stage, to: stage }, ...(why ? { disqualifyReason: { from: l.disqualifyReason, to: why } } : {}) },
+          userId: user.id,
+        })),
       });
-      await leadAudit(l.id, { stage: { from: l.stage, to: stage }, ...(why ? { disqualifyReason: { from: l.disqualifyReason, to: why } } : {}) }, user.id);
-      moved++;
     }
-    await syncLifecycle(
-      leads.filter((l) => l.stage !== stage).map((l) => l.contactId),
-      { leadStatus: LEAD_STATUS_FOR_STAGE[stage as LeadStage] },
-      user.id,
-    );
-    revalidateLeads(leads.map((l) => l.contactId));
-    return { ok: true, data: { moved } };
+    // A qualified lead is a real opportunity for its company (once per company, however many of its people qualify)
+    if (qualifying) {
+      for (const companyId of new Set(toMove.map((l) => l.companyId).filter((c): c is string => !!c))) {
+        await advanceJourney(companyId, STAGE.opportunity, user.id, { source: "manual", reason: "Lead qualified" });
+      }
+    }
+    const contactIds = [...new Set(toMove.map((l) => l.contactId))];
+    await syncLifecycle(contactIds, { leadStatus: LEAD_STATUS_FOR_STAGE[stage as LeadStage], ...(qualifying ? { lifecycle: "SQL" } : {}) }, user.id);
+    revalidateLeads(contactIds.length > 50 ? [] : contactIds);
+    return { ok: true, data: { moved: toMove.length } };
   } catch (e) {
     return fail(e);
   }

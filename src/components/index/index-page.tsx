@@ -277,7 +277,7 @@ export function IndexPage({ data }: { data: IndexData }) {
 
   const previewRow = rows.find((r) => r.id === previewId) ?? null;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
-  const otherObjects = (["CONTACT", "COMPANY", "DEAL"] as const).filter((o) => o !== object);
+  const otherObjects = (["CONTACT", "COMPANY"] as const).filter((o) => o !== object);
 
   return (
     <div className="flex h-full min-h-[560px] flex-col overflow-hidden rounded-[6px] border border-line bg-surface">

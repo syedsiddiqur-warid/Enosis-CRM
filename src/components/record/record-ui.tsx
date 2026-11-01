@@ -59,7 +59,7 @@ export function RecordCard({
 }
 
 /** Accent colors for the sections people look for first */
-export const CARD_ACCENTS = { contacts: "#0091ae", phones: "#00a38d", emails: "#ff7a59", keyInfo: "#7c5cfc", deals: "#f5a623" };
+export const CARD_ACCENTS = { contacts: "#0091ae", phones: "#00a38d", emails: "#ff7a59", keyInfo: "#7c5cfc" };
 
 export function CardGear({ label, step = 11 }: { label: string; step?: number }) {
   return (

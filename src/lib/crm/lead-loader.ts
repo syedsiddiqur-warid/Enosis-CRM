@@ -41,7 +41,6 @@ const leadSelect = {
   disqualifyReason: true,
   createdAt: true,
   campaign: { select: { id: true, name: true } },
-  deal: { select: { id: true, name: true } },
   contact: { select: { id: true, firstName: true, lastName: true, email: true, jobTitle: true, phone: true, mobile: true, timeZone: true } },
   company: { select: { id: true, name: true, domain: true, timeZone: true, followGroup: true, followScore: true } },
 } satisfies Prisma.LeadSelect;
