@@ -1,19 +1,20 @@
 "use client";
 
-import { Copy, Handshake, Mail, MoreHorizontal, Phone, Plus, Search, Users } from "lucide-react";
+import { Copy, Mail, MoreHorizontal, Phone, Plus, Search, Users } from "lucide-react";
 import Link from "next/link";
 import { Fragment, useEffect, useState } from "react";
 import { CompanyLogo, LocalTime, Pill, copyText } from "@/components/index/values";
 import { Button, Input } from "@/components/ui/button";
 import { Checkbox, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, Popover, PopoverAnchor, PopoverContent, PopoverTrigger, Tooltip } from "@/components/ui/overlays";
 import { searchCompanies } from "@/lib/crm/actions";
-import { formatDate, friendlyDateTime } from "@/lib/crm/dates";
+import { friendlyDateTime } from "@/lib/crm/dates";
 import { associate, dissociate, searchContacts, setAssociationLabels, setPrimaryCompany } from "@/lib/crm/record-actions";
 import type { LayoutConfig } from "@/lib/crm/record-types";
-import { cn, formatNumber, formatPhone, phoneHref, splitPhone } from "@/lib/utils";
+import { cn, formatPhone, phoneHref, splitPhone } from "@/lib/utils";
 import { deletePhoneNumber, savePhoneNumber, setPhoneStatus, type PhoneInput } from "@/lib/crm/phone-actions";
 import { saveCompanyEmails } from "@/lib/crm/email-actions";
 import { CampaignsCard, LeadJourneyCard, SignalsCard } from "./company-cards";
+import { DealsCard, LeadsCard } from "./deal-lead-cards";
 import { PhoneDialog } from "./phone-dialog";
 import { useRecord } from "./record-context";
 import { CARD_ACCENTS, CardGear, RecordCard } from "./record-ui";
@@ -34,7 +35,13 @@ export function RightColumn() {
       {cards.map((card) => {
         if (card.kind === "association" && card.object === "COMPANY" && data.object === "CONTACT") return <CompaniesCard key={card.id} card={card} />;
         if (card.kind === "association" && card.object === "CONTACT" && data.object === "COMPANY") return <ContactsCard key={card.id} card={card} />;
-        if (card.kind === "association" && card.object === "DEAL") return <DealsCard key={card.id} card={card} />;
+        if (card.kind === "association" && card.object === "DEAL")
+          return (
+            <Fragment key={card.id}>
+              <LeadsCard />
+              <DealsCard card={card} />
+            </Fragment>
+          );
         // Company emails sit right under Company numbers
         if (card.kind === "phone_numbers")
           return data.object === "COMPANY" ? (
@@ -634,57 +641,6 @@ function CompanyEmailsCard() {
         </form>
       ) : (
         !emails.length && <p className="text-[13px] text-ink-subtle">No company emails yet. People&apos;s own emails are on their contact cards.</p>
-      )}
-    </RecordCard>
-  );
-}
-
-function DealsCard({ card }: { card: CardConfig }) {
-  const { data } = useRecord();
-  return (
-    <RecordCard
-      id={`right:${card.id}`}
-      title={card.title ?? "Deals"}
-      icon={Handshake}
-      accent={CARD_ACCENTS.deals}
-      count={data.deals.length}
-      actions={
-        <>
-          <Tooltip content="Creating deals arrives in build step 7">
-            <span>
-              <Button size="sm" variant="ghost" disabled>
-                <Plus /> Add
-              </Button>
-            </span>
-          </Tooltip>
-          <CardGear label="Card settings" />
-        </>
-      }
-    >
-      {data.deals.length ? (
-        <ul className="space-y-2">
-          {data.deals.slice(0, card.limit ?? 5).map((d) => (
-            <li key={d.id} className="rounded-[4px] border border-line p-2.5 text-[13px]">
-              <div className="font-medium">{d.name}</div>
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-ink-muted">
-                <Pill label={d.stage} color={d.stageColor ?? undefined} />
-                {d.amount !== null && <span>{formatNumber(d.amount, "currency")}</span>}
-                {d.closeDate && <span>Close {formatDate(d.closeDate)}</span>}
-              </div>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <div className="flex flex-col items-center py-3 text-center">
-          <svg width="72" height="52" viewBox="0 0 72 52" aria-hidden className="mb-2">
-            <rect x="6" y="10" width="60" height="36" rx="4" fill="var(--surface-muted)" stroke="var(--border-strong)" />
-            <rect x="14" y="30" width="8" height="10" rx="1" fill="#00bda5" />
-            <rect x="27" y="24" width="8" height="16" rx="1" fill="#00a4bd" />
-            <rect x="40" y="18" width="8" height="22" rx="1" fill="#6a78d1" />
-            <rect x="53" y="13" width="8" height="27" rx="1" fill="#ff7a59" />
-          </svg>
-          <p className="text-[13px] text-ink-muted">Track the revenue opportunities associated with this record.</p>
-        </div>
       )}
     </RecordCard>
   );

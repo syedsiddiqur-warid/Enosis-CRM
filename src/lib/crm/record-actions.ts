@@ -12,6 +12,7 @@ import { FEEDBACK_RATINGS, FEEDBACK_TAGS } from "./follow-up";
 import { rescoreCompanies } from "./follow-score";
 import { OBJECT_LABELS } from "./defaults";
 import { STAGE, memberStatusForCall, nextCallStatus, phoneStatusForCall, stageForCall } from "./journey";
+import { trackLeadCall } from "./lead-sync";
 import { advanceJourney } from "./record-writes";
 import { collapsedKey, followKey, keyInfoKey } from "./record-loader";
 import type { ActivityInput } from "./record-types";
@@ -262,6 +263,8 @@ export async function logActivity(object: CrmObject, recordId: string, input: Ac
     }
     // Calls and caller feedback decide who to chase, nurture or drop
     if (isCall) await rescoreCompanies(companyIds);
+    // The person's open lead counts the touch and moves forward (a good conversation opens one)
+    if (isCall && target) await trackLeadCall({ contactId: target, result: input.callResult, rating: (fields.feedbackRating as string | null | undefined) ?? null, at, happened, campaignId }, user.id);
 
     if (input.followUp) {
       await db.activity.create({

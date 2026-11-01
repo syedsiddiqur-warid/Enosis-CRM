@@ -25,6 +25,7 @@ import { formatDateTime, localTime } from "@/lib/crm/dates";
 import { cloneRecord, deleteRecord, getRecordHistory, setFollow, setKeyInfo, type HistoryRow } from "@/lib/crm/record-actions";
 import type { QuickAction } from "@/lib/crm/record-types";
 import { colorFor, formatPhone, initials, phoneHref } from "@/lib/utils";
+import { RecordDealDialog } from "./deal-lead-cards";
 import { useRecord } from "./record-context";
 import { CARD_ACCENTS, PropertyRow, RecordCard, isShown } from "./record-ui";
 
@@ -66,6 +67,7 @@ function HeaderCard() {
   const router = useRouter();
   const [historyOpen, setHistoryOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [creatingDeal, setCreatingDeal] = useState(false);
   const { header, object, labels } = data;
   const time = localTime(header.timeZone);
 
@@ -216,11 +218,7 @@ function HeaderCard() {
             <DropdownMenu key={key}>
               <DropdownMenuTrigger asChild>{button}</DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <Tooltip content="Deals arrive in build step 7" side="left">
-                  <span>
-                    <DropdownMenuItem disabled>Create deal</DropdownMenuItem>
-                  </span>
-                </Tooltip>
+                <DropdownMenuItem onSelect={() => setCreatingDeal(true)}>Create deal</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setHistoryOpen(true)}>View property history</DropdownMenuItem>
                 <DropdownMenuItem
                   onSelect={() => {
@@ -237,6 +235,7 @@ function HeaderCard() {
       </div>
 
       <HistoryDialog open={historyOpen} onOpenChange={setHistoryOpen} />
+      {creatingDeal && <RecordDealDialog onClose={() => setCreatingDeal(false)} />}
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent title={`Delete ${header.name}?`}>
           <div className="space-y-4 px-6 py-5 text-[13px]">

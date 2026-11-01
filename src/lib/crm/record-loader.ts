@@ -189,10 +189,15 @@ export async function loadRecord(object: CrmObject, id: string, userId: string) 
     (await db.campaign.findMany({ where: { id: { in: journeyEvents.map((e) => e.campaignId).filter((x): x is string => !!x) } }, select: { id: true, name: true } })).map((c) => [c.id, c.name]),
   );
 
-  const [activities, phones, deals, caseStudies, segments] = await Promise.all([
+  const [activities, phones, deals, leads, caseStudies, segments] = await Promise.all([
     db.activity.findMany({ where: activityWhere, include: activityInclude, orderBy: { occurredAt: "desc" }, take: ACTIVITY_LIMIT }),
     db.phoneNumber.findMany({ where: phoneWhere, include: { contact: { select: { firstName: true, lastName: true, email: true } } }, orderBy: { createdAt: "asc" } }),
     db.deal.findMany({ where: dealWhere, include: { stage: { select: { name: true, color: true } } }, orderBy: { createdAt: "desc" } }),
+    db.lead.findMany({
+      where: { deletedAt: null, ...(object === "CONTACT" ? { contactId: id } : { companyId: id }) },
+      select: { id: true, stage: true, label: true, touches: true, lastTouchAt: true, ownerId: true, disqualifyReason: true, dealId: true, contact: { select: { id: true, firstName: true, lastName: true, email: true } } },
+      orderBy: { createdAt: "desc" },
+    }),
     industry || technologies.length
       ? db.caseStudy.findMany({ where: { OR: [...(industry ? [{ industry }] : []), ...(technologies.length ? [{ technologies: { hasSome: technologies } }] : [])] }, take: 10 })
       : Promise.resolve([]),
@@ -251,6 +256,7 @@ export async function loadRecord(object: CrmObject, id: string, userId: string) 
       contactName: p.contact ? fullName(p.contact) : null,
     })),
     deals: deals.map((d) => ({ id: d.id, name: d.name, amount: d.amount?.toNumber() ?? null, closeDate: iso(d.closeDate), stage: d.stage.name, stageColor: d.stage.color })),
+    leads: leads.map((l) => ({ id: l.id, stage: l.stage, label: l.label, touches: l.touches, lastTouchAt: iso(l.lastTouchAt), ownerId: l.ownerId, disqualifyReason: l.disqualifyReason, dealId: l.dealId, contact: { id: l.contact.id, name: fullName(l.contact) } })),
     caseStudies: scored,
     segments,
     options: {

@@ -37,7 +37,7 @@ export async function GET(req: Request) {
   return NextResponse.json([
     ...contacts.map((c) => ({ type: "contact", id: c.id, title: fullName(c), subtitle: [c.jobTitle, c.email].filter(Boolean).join(" · "), href: `/contacts/${c.id}` })),
     ...companies.map((c) => ({ type: "company", id: c.id, title: c.name, subtitle: c.domain ?? undefined, href: `/companies/${c.id}` })),
-    ...deals.map((d) => ({ type: "deal", id: d.id, title: d.name, subtitle: d.stage.name, href: `/deals` })),
+    ...deals.map((d) => ({ type: "deal", id: d.id, title: d.name, subtitle: d.stage.name, href: `/deals/${d.id}` })),
     ...phones.map((p) => ({
       type: "phone",
       id: p.id,

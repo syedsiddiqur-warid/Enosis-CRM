@@ -20,6 +20,7 @@ import {
   Undo2,
   UserPlus,
   X,
+  Target,
 } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
@@ -54,6 +55,7 @@ import {
 } from "@/lib/crm/actions";
 import { AddToCampaignButton } from "@/components/campaigns/add-to-campaign";
 import { CreateTasksButton } from "@/components/tasks/create-tasks-button";
+import { createLeads } from "@/lib/crm/lead-actions";
 import { removeFromCampaign, removePeopleFromCampaign } from "@/lib/crm/campaign-actions";
 import { OBJECT_LABELS } from "@/lib/crm/defaults";
 import type { IndexData } from "@/lib/crm/index-loader";
@@ -395,6 +397,22 @@ export function IndexPage({ data }: { data: IndexData }) {
                     router.refresh();
                   }}
                 />
+              )}
+              {object === "CONTACT" && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-link"
+                  onClick={async () => {
+                    const res = await createLeads([...selected], { source: "Cold call" });
+                    if (!res.ok) return setToast({ message: res.error });
+                    setSelected(new Set());
+                    const { created, skipped } = res.data!;
+                    setToast({ message: `${created} ${created === 1 ? "lead" : "leads"} created${skipped ? `, ${skipped} already had an open lead` : ""}` });
+                  }}
+                >
+                  <Target /> Create leads
+                </Button>
               )}
             </>
           }

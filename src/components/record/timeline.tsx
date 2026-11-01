@@ -55,7 +55,9 @@ export function activityTitle(a: RecordActivity, userName: (id: string | null) =
     case "SYSTEM":
       if (d.kind === "imported") return `Created from Import${d.source ? ` (${d.source})` : ""}`;
       if (d.kind === "created") return d.source === "Clone" ? "Created as a copy" : "Record created";
+      if (d.kind === "deal_created") return `Deal created – ${d.label ?? ""} (${String(d.to ?? "")})`;
       if (d.kind === "property_change") {
+        if (d.property === "stage" && d.label === "Deal stage") return `Deal moved to ${String(d.to)}`;
         if (d.property === "lifecycleStage" && d.to) return `Lifecycle stage moved to ${String(d.to)}`;
         return `${d.label ?? d.property} ${d.to === null || d.to === "" ? "cleared" : `set to ${String(d.to)}`}`;
       }

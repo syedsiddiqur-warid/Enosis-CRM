@@ -23,6 +23,7 @@ export function activitySummary(a: ActivityLike): string {
       const d = (a.systemData ?? {}) as { kind?: string; label?: string; to?: unknown; source?: string };
       if (d.kind === "imported") return `Created from Import${d.source ? ` (${d.source})` : ""}`;
       if (d.kind === "created") return "Record created";
+      if (d.kind === "deal_created") return `Deal created: ${d.label} (${String(d.to)})`;
       if (d.kind === "property_change") return `${d.label} changed to ${d.to === null || d.to === "" ? "(empty)" : String(d.to)}`;
       return "System event";
     }

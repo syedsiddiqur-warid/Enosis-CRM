@@ -4,8 +4,6 @@ import { notFound } from "next/navigation";
 
 // Sections planned in later build-order steps. Each shows where it lands so nav never 404s.
 const PLANNED: Record<string, { title: string; step: string }> = {
-  leads: { title: "Leads", step: "Step 8 – Lifecycle and Enosis status fields" },
-  deals: { title: "Deals", step: "Step 7 – Deals, pipeline board" },
   dashboards: { title: "Dashboards", step: "Step 10 – Dashboards" },
   notifications: { title: "Notifications", step: "Step 11 – Preferences and notifications" },
 };

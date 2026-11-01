@@ -29,6 +29,7 @@ enum ObjectType {
   CONTACT
   COMPANY
   DEAL
+  LEAD
   ACTIVITY
   PHONE_NUMBER
 }
@@ -108,11 +109,12 @@ model User {
   updatedAt   DateTime  @updatedAt
 
   teams           TeamMember[]
-  ownedContacts   Contact[]      @relation("ContactOwner")
-  ownedCompanies  Company[]      @relation("CompanyOwner")
-  ownedDeals      Deal[]         @relation("DealOwner")
-  ownedActivities Activity[]     @relation("ActivityOwner")
-  assignedTasks   Activity[]     @relation("ActivityAssignee")
+  ownedContacts   Contact[]         @relation("ContactOwner")
+  ownedCompanies  Company[]         @relation("CompanyOwner")
+  ownedDeals      Deal[]            @relation("DealOwner")
+  ownedLeads      Lead[]            @relation("LeadOwner")
+  ownedActivities Activity[]        @relation("ActivityOwner")
+  assignedTasks   Activity[]        @relation("ActivityAssignee")
   savedViews      SavedView[]
   segments        Segment[]
   notifications   Notification[]
@@ -235,17 +237,18 @@ model Company {
   deletedAt       DateTime?
   createdById     String?
 
-  contacts      ContactCompany[]
+  contacts         ContactCompany[]
   researchRequests ResearchRequest[]
-  campaignTargets CampaignContact[]
-  phoneNumbers  PhoneNumber[]
-  deals         DealCompany[]
-  activities    ActivityCompany[]
-  segments      SegmentMember[]
-  journeyEvents JourneyEvent[]
-  signals       BuyingSignal[]
-  campaigns     CampaignCompany[]
-  enrichments   EnrichmentRun[]
+  campaignTargets  CampaignContact[]
+  phoneNumbers     PhoneNumber[]
+  deals            DealCompany[]
+  leads            Lead[]
+  activities       ActivityCompany[]
+  segments         SegmentMember[]
+  journeyEvents    JourneyEvent[]
+  signals          BuyingSignal[]
+  campaigns        CampaignCompany[]
+  enrichments      EnrichmentRun[]
 
   @@index([name])
   @@index([ownerId])
@@ -302,14 +305,15 @@ model Contact {
   deletedAt             DateTime?
   createdById           String?
 
-  companies     ContactCompany[]
-  phoneNumbers  PhoneNumber[]
-  deals         DealContact[]
-  activities    ActivityContact[]
-  callsTargeted Activity[]        @relation("CallTargetContact")
-  segments      SegmentMember[]
+  companies        ContactCompany[]
+  phoneNumbers     PhoneNumber[]
+  deals            DealContact[]
+  activities       ActivityContact[]
+  callsTargeted    Activity[]        @relation("CallTargetContact")
+  leads            Lead[]
+  segments         SegmentMember[]
   researchRequests ResearchRequest[]
-  campaignTargets CampaignContact[]
+  campaignTargets  CampaignContact[]
 
   @@index([email])
   @@index([lastName, firstName])
@@ -523,6 +527,9 @@ model Deal {
   sourceCampaign String?
   lostReason     String?
   lastActivityAt DateTime?
+  // When the deal entered its current stage, and when it was won or lost
+  stageEnteredAt DateTime      @default(now())
+  closedAt       DateTime?
   properties     Json          @default("{}")
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
@@ -531,6 +538,7 @@ model Deal {
   contacts   DealContact[]
   companies  DealCompany[]
   activities ActivityDeal[]
+  leads      Lead[]
 
   @@index([pipelineId, stageId])
   @@index([ownerId])
@@ -564,22 +572,22 @@ model DealCompany {
 // ─────────────────────────────── Segments ───────────────────────────────
 
 model Segment {
-  id         String          @id @default(cuid())
-  name       String
-  objectType ObjectType
-  type       SegmentType
+  id          String            @id @default(cuid())
+  name        String
+  objectType  ObjectType
+  type        SegmentType
   // Active segments: FilterGroup[] (groups OR'ed, conditions inside a group use the group's op)
-  filters    Json?
+  filters     Json?
   // Records left out even when they match or were added: { segments: string[], records: string[] }
   exclusions  Json?
   description String?
-  ownerId    String?
-  owner      User?           @relation(fields: [ownerId], references: [id], onDelete: SetNull)
-  visibility Visibility      @default(EVERYONE)
-  createdAt  DateTime        @default(now())
-  updatedAt  DateTime        @updatedAt
-  members    SegmentMember[]
-  snapshots  SegmentSnapshot[]
+  ownerId     String?
+  owner       User?             @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  visibility  Visibility        @default(EVERYONE)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  members     SegmentMember[]
+  snapshots   SegmentSnapshot[]
 }
 
 /// One size reading per segment per day (Asia/Dhaka), for the 7-day change
@@ -929,10 +937,11 @@ model Campaign {
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
 
-  members    CampaignCompany[]
-  activities Activity[]
+  members          CampaignCompany[]
+  activities       Activity[]
   researchRequests ResearchRequest[]
-  people     CampaignContact[]
+  people           CampaignContact[]
+  leads            Lead[]
 
   @@index([status])
 }
@@ -1129,4 +1138,44 @@ model CampaignContact {
   @@id([campaignId, contactId])
   @@index([campaignId, companyId])
   @@index([contactId])
+}
+
+// ─────────────────────────────── Leads ───────────────────────────────
+
+// A lead: one person (and their company) being worked toward a sales conversation.
+// Stages: New → Attempting → Connected → Qualified (becomes a deal) or Disqualified.
+model Lead {
+  id               String    @id @default(cuid())
+  name             String
+  contactId        String
+  contact          Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  companyId        String?
+  company          Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  ownerId          String?
+  owner            User?     @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  stage            String    @default("New")
+  stageEnteredAt   DateTime  @default(now())
+  leadType         String? // New business / Existing business / Re-engagement
+  label            String? // Hot / Warm / Cold
+  source           String?
+  campaignId       String?
+  campaign         Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  disqualifyReason String?
+  // The deal it became when qualified
+  dealId           String?
+  deal             Deal?     @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  // Call rollups since the lead was created
+  touches          Int       @default(0)
+  lastTouchAt      DateTime?
+  lastResult       String?
+  closedAt         DateTime?
+  createdById      String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+
+  @@index([stage, ownerId])
+  @@index([contactId])
+  @@index([companyId])
+  @@index([deletedAt])
 }
