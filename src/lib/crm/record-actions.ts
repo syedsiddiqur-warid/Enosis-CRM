@@ -4,7 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/auth";
 import { db } from "@/lib/db";
-import { fullName } from "@/lib/utils";
+import { fullName, toE164 } from "@/lib/utils";
 import { bulkDelete } from "./actions";
 import { runActivityRules } from "./automation";
 import { syncCompaniesFromPeople } from "./campaigns";
@@ -191,6 +191,18 @@ export async function logActivity(object: CrmObject, recordId: string, input: Ac
       // The outcome tells us whether the number works
       const status = phoneStatusForCall(input.callResult);
       await db.phoneNumber.update({ where: { id: input.phoneNumberId }, data: { lastDialedAt: at, ...(status ? { status } : {}) } });
+    } else if (isCall && input.dialedNumber && companyIds.length) {
+      // A number typed on a contact record becomes a saved number once it's dialed, so its outcome (e.g. Wrong) sticks
+      const number = toE164(input.dialedNumber);
+      const status = phoneStatusForCall(input.callResult);
+      if (number) {
+        const saved = await db.phoneNumber.findFirst({ where: { companyId: companyIds[0], number, extension: null } });
+        if (saved) await db.phoneNumber.update({ where: { id: saved.id }, data: { lastDialedAt: at, ...(status ? { status } : {}) } });
+        else
+          await db.phoneNumber.create({
+            data: { companyId: companyIds[0], contactId: target ?? null, number, type: target ? "Direct" : "Main", status: status ?? "Unknown", lastDialedAt: at },
+          });
+      }
     }
 
     // Company-level tracking: call rollups, campaign membership progress, lead journey

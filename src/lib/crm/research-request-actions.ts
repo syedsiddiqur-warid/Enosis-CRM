@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/auth";
 import { db } from "@/lib/db";
 import { OPEN_STATUSES } from "./calling-queue";
+import { RECHECK_KIND } from "./recheck";
 import { RESEARCH_REQUEST_KINDS } from "./research";
 
 type Result<T = undefined> = { ok: true; data?: T } | { ok: false; error: string };
@@ -101,6 +102,8 @@ export async function sendBackResearchRequest(id: string, result: string): Promi
     if (r.status === "Sent back" || r.status === "Cancelled") throw new Error(`This request is already ${r.status.toLowerCase()}`);
     await db.researchRequest.update({ where: { id }, data: { status: "Sent back", result: result.trim(), researcherId: r.researcherId ?? user.id, resolvedAt: new Date(), seenAt: null } });
     await release(r.campaignId, r.companyId);
+    // A re-check refreshes the research date, so the company isn't sent for another one on its next return
+    if (r.kind === RECHECK_KIND) await db.company.update({ where: { id: r.companyId }, data: { researchedAt: new Date() } });
     await timeline(r.companyId, user.id, `${r.kind} sent back: ${result.trim()}`);
     if (r.requestedById && r.requestedById !== user.id) {
       await db.notification.create({

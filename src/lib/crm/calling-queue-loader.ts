@@ -4,6 +4,7 @@ import { fullName } from "@/lib/utils";
 import { OPEN_STATUSES, compareQueue, inBusinessHours, queueBucket } from "./calling-queue";
 import { parseSettings, personDone } from "./campaigns";
 import { getPropDefs } from "./properties";
+import { recheckStaleReturns } from "./recheck";
 import type { PropOption, UserLite } from "./types";
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
@@ -83,6 +84,8 @@ async function optionList(key: string) {
 export async function loadQueue(campaignId: string, userId: string, sp: QueueSearchParams) {
   const campaign = await db.campaign.findUnique({ where: { id: campaignId } });
   if (!campaign) return null;
+  // Nurture returns with stale research go to research first
+  await recheckStaleReturns(campaignId);
 
   // Default to my companies when I have any, otherwise everyone's
   const mineCount = await db.campaignCompany.count({ where: { campaignId, removedAt: null, assignedToId: userId, status: { in: OPEN_STATUSES } } });
@@ -202,7 +205,23 @@ async function loadCompany(companyId: string, campaignId: string, maxAttempts: n
       where: { companyId, contact: { deletedAt: null } },
       include: {
         contact: {
-          select: { id: true, firstName: true, lastName: true, email: true, jobTitle: true, phone: true, mobile: true, inDbnd: true, crtCount: true, callStatus: true, doNotCall: true, timeZone: true, leadStatus: true },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            jobTitle: true,
+            phone: true,
+            mobile: true,
+            inDbnd: true,
+            crtCount: true,
+            callStatus: true,
+            doNotCall: true,
+            timeZone: true,
+            leadStatus: true,
+            // The person's status: their latest lead's stage
+            leads: { where: { deletedAt: null }, orderBy: { createdAt: "desc" }, take: 1, select: { stage: true } },
+          },
         },
       },
       orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
@@ -264,6 +283,7 @@ async function loadCompany(companyId: string, campaignId: string, maxAttempts: n
       crtCount: l.contact.crtCount,
       callStatus: l.contact.callStatus,
       leadStatus: l.contact.leadStatus,
+      leadStage: l.contact.leads[0]?.stage ?? null,
       doNotCall: l.contact.doNotCall,
       labels: l.labels,
       isPrimary: l.isPrimary,

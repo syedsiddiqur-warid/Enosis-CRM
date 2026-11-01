@@ -35,6 +35,13 @@ export async function moveJourneyStage(companyId: string, stage: string, reason?
       const co = await db.company.findUniqueOrThrow({ where: { id: companyId }, select: { properties: true } });
       await db.company.update({ where: { id: companyId }, data: { properties: { ...((co.properties ?? {}) as Prisma.JsonObject), disqualifyReason: reason.trim() } } });
     }
+    // Won or lost: callers stop working it in their campaigns
+    if (changed && (stage === STAGE.customer || stage === STAGE.disqualified)) {
+      await db.campaignCompany.updateMany({
+        where: { companyId, removedAt: null, status: { notIn: ["Completed", "Disqualified"] } },
+        data: { status: stage === STAGE.customer ? "Completed" : "Disqualified", nextActionAt: null },
+      });
+    }
     revalidateCompany(companyId);
     return { ok: true };
   } catch (e) {

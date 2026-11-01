@@ -10,6 +10,7 @@ import { Popover, PopoverContent, PopoverTrigger, Tooltip } from "@/components/u
 import { addCompaniesToCampaign, searchCampaigns } from "@/lib/crm/campaign-actions";
 import { addSignal, deleteSignal, moveJourneyStage } from "@/lib/crm/company-actions";
 import { formatDate, friendlyDateTime } from "@/lib/crm/dates";
+import { STAGE } from "@/lib/crm/journey";
 import type { LayoutConfig } from "@/lib/crm/record-types";
 import { cn } from "@/lib/utils";
 import { useRecord } from "./record-context";
@@ -74,6 +75,7 @@ export function LeadJourneyCard({ card }: { card: CardConfig }) {
       <div className="mt-1 text-[12px] text-ink-muted">
         {isExitStage ? "Left the journey (exit stage)" : idx >= 0 ? `Stage ${idx + 1} of ${path.length}${next ? ` · next: ${next.label}` : ""}` : ""}
       </div>
+      {isCompany && j.stage && SALES_DECISION_STAGES.includes(j.stage) && <WonLost />}
 
       {j.events.length > 0 && (
         <ol className="mt-3 space-y-2.5 border-l-2 border-line pl-3">
@@ -100,6 +102,57 @@ export function LeadJourneyCard({ card }: { card: CardConfig }) {
         </button>
       )}
     </RecordCard>
+  );
+}
+
+/** Stages where sales decides the outcome: a conversation, a meeting or an opportunity */
+const SALES_DECISION_STAGES: string[] = [STAGE.connected, STAGE.meeting, STAGE.opportunity];
+
+/** Close the journey: the company signed (Client), or sales lost it (with a reason). */
+function WonLost() {
+  const { data, toast, refresh } = useRecord();
+  const j = data.journey!;
+  const [losing, setLosing] = useState(false);
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const lostStage = STAGE.disqualified;
+  async function move(stage: string, why: string, message: string) {
+    setBusy(true);
+    setError(null);
+    const res = await moveJourneyStage(j.companyId, stage, why);
+    setBusy(false);
+    if (!res.ok) return setError(res.error);
+    toast({ message });
+    refresh();
+  }
+  return (
+    <div className="mt-2.5 rounded-[4px] border border-line bg-surface-muted p-2 text-[13px]">
+      {losing ? (
+        <div className="space-y-1.5">
+          <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why was it lost? e.g. went with another vendor" aria-label="Why it was lost" autoFocus />
+          <div className="flex gap-1.5">
+            <Button size="sm" variant="primary" disabled={!reason.trim() || busy} onClick={() => void move(lostStage, reason.trim(), "Marked lost")}>
+              Mark lost
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setLosing(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="mr-auto text-[12px] text-ink-muted">Outcome</span>
+          <Button size="sm" variant="primary" disabled={busy} onClick={() => void move(STAGE.customer, "Signed: became a client", `${j.companyName} is now a client`)}>
+            Mark as client
+          </Button>
+          <Button size="sm" variant="secondary" disabled={busy} onClick={() => setLosing(true)}>
+            Mark lost
+          </Button>
+        </div>
+      )}
+      {error && <p className="mt-1 text-[12px] text-danger">{error}</p>}
+    </div>
   );
 }
 

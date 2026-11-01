@@ -11,8 +11,10 @@ import { BUCKET_LABEL, inBusinessHours, nextLocalMorning } from "@/lib/crm/calli
 import type { QueueCompany, QueueData } from "@/lib/crm/calling-queue-loader";
 import { formatDate, friendlyDateTime, fromLocalInput, toLocalInput } from "@/lib/crm/dates";
 import { CONVERSATION_OUTCOMES, FEEDBACK_RATINGS, FEEDBACK_TAGS, FOLLOW_GROUP_INFO, type FollowGroup } from "@/lib/crm/follow-up";
+import { leadStageColor } from "@/lib/crm/leads";
 import { moveCompanyNumber, setPhoneNotes, type NumberSource } from "@/lib/crm/phone-actions";
 import { logActivity } from "@/lib/crm/record-actions";
+import { createResearchRequest } from "@/lib/crm/research-request-actions";
 import { cn, formatPhone } from "@/lib/utils";
 import { ContactDialog, EditCompanyDialog, NumberDialog, ResearchPanel, ResearchRequestDialog } from "./caller-tools";
 
@@ -297,6 +299,26 @@ function Session({
   const [feedback, setFeedback] = useState<Feedback>({ rating: null, tags: [], revisitAt: null });
   // The number whose note is being edited
   const [noteFor, setNoteFor] = useState<string | null>(null);
+  // After a wrong number: who has no working number left (offers "Ask research for a new number")
+  const [noNumber, setNoNumber] = useState<{ contactId: string | null; name: string } | null>(null);
+
+  async function askNewNumber(hold: boolean) {
+    if (!noNumber) return;
+    setError(null);
+    const res = await createResearchRequest({
+      companyId: c.id,
+      contactId: noNumber.contactId,
+      campaignId: data.campaign.id,
+      kind: noNumber.contactId ? "Find direct number" : "Verify company info",
+      note: `Wrong number. No working number left for ${noNumber.name}.`,
+      hold,
+    });
+    if (!res.ok) return setError(res.error);
+    const who = noNumber.name;
+    setNoNumber(null);
+    if (hold) onSnoozed(`Research asked for a new number for ${who}. ${c.name} is out of the queue until it's back`);
+    else onChanged(`Research asked for a new number for ${who}`);
+  }
   const [noteText, setNoteText] = useState("");
   // Outcomes per person ("" = the company line): recent calls plus what was logged on this visit
   const [triedNow, setTried] = useState<Record<string, string>>({});
@@ -403,6 +425,17 @@ function Session({
     try {
       localStorage.removeItem(draftKey);
     } catch {}
+
+    // A wrong number that leaves the person (or the company) without a working line: offer to send it back to research
+    if (result === "Wrong Number") {
+      const dialed = phone;
+      const x = c.contacts.find((p) => p.id === contactId);
+      const working = [
+        ...c.phones.filter((p) => (contactId ? p.contactId === contactId : !p.contactId) && `id:${p.id}` !== dialed && !["Wrong", "Disconnected"].includes(p.status)).map((p) => p.id),
+        ...(x ? [x.phone, x.mobile].filter((n) => n && `raw:${n}` !== dialed) : []),
+      ];
+      setNoNumber(working.length ? null : { contactId: contactId || null, name: x?.name ?? `${c.name} (company line)` });
+    } else setNoNumber(null);
 
     // Stay on this company (the caller moves on with Next company): get ready for the next person nobody has tried yet
     const nowTried = { ...tried, [contactId]: result };
@@ -630,6 +663,8 @@ function Session({
           ))}
           {x.inDbnd?.toLowerCase() === "yes" && <Pill label="In DBND" color="#00a4bd" />}
           {x.doNotCall && <Pill label="Do not call" color="#f2545b" />}
+          {/* One status per person: their lead stage (New, Attempting, Connected, Qualified, Disqualified) */}
+          <Pill label={x.leadStage ? `Lead: ${x.leadStage}` : "Not a lead yet"} color={x.leadStage ? leadStageColor(x.leadStage) : "#cbd6e2"} />
           {x.id in tried && <Pill label={`Tried: ${tried[x.id]}`} color="#00bda5" />}
           {x.target && (
             <Pill
@@ -641,7 +676,6 @@ function Session({
         <span className="block text-[12px] text-ink-muted">{[x.jobTitle, x.email].filter(Boolean).join(" · ")}</span>
         <span className="block text-[12px] text-ink-subtle">
           CRT {x.crtCount} · {x.callStatus ?? "Never called"}
-          {x.leadStatus ? ` · ${x.leadStatus}` : ""}
         </span>
         {directNumbers(x).map((n) => renderNumber(n, x.id, true))}
         <span className="mt-1 flex gap-3 text-[12px]">
@@ -848,6 +882,25 @@ function Session({
             <summary className="cursor-pointer font-semibold">Campaign pitch</summary>
             <p className="thin-scroll mt-1 max-h-[160px] overflow-y-auto whitespace-pre-line text-ink-muted">{data.campaign.pitch}</p>
           </details>
+        )}
+
+        {noNumber && (
+          <div className="space-y-2 rounded-[6px] border-2 border-[#f2545b]/60 bg-[#fde8e9] p-3 text-[13px]" role="alert">
+            <div>
+              <strong>No working number left for {noNumber.name}.</strong> Send it back to research for a new one?
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <Button size="sm" variant="primary" onClick={() => void askNewNumber(false)}>
+                <FlaskConical /> Ask research, keep calling here
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => void askNewNumber(true)}>
+                Ask and hold {c.name}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setNoNumber(null)}>
+                Not now
+              </Button>
+            </div>
+          </div>
         )}
 
         <div className="space-y-3 rounded-[6px] border border-line bg-surface p-3" role="group" aria-label="Call feedback">
