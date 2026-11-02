@@ -39,24 +39,19 @@ Add `&connect_timeout=15&connection_limit=5` to the end. This is your `DATABASE_
 > work through Neon's pooler. `connection_limit=5` keeps each function from opening too many connections.
 > If you ever see Neon's pooled hostname (`-pooler`) in the variable, migrations will fail.
 
-## 2. Set up sign-in
+## 2. Sign-in
 
-You need at least one. The callback URLs use your Netlify address, so create the Netlify site first
-(step 3) if you don't know it yet, then come back and fill these in. Only `@enosisbd.com` accounts are let in
-(`AUTH_ALLOWED_DOMAIN`).
+People sign in with their @enosisbd.com email and a password; no Google or Microsoft setup is needed.
 
-**Google** ([Google Cloud Console](https://console.cloud.google.com/apis/credentials)):
-- *Create credentials → OAuth client ID → Web application*
-- Authorized redirect URI: `https://YOUR-SITE.netlify.app/api/auth/callback/google`
-- Copy the client ID and secret into `AUTH_GOOGLE_ID` and `AUTH_GOOGLE_SECRET`.
-- If the OAuth consent screen is "Internal", only your Google Workspace users can sign in, which is what you want.
-
-**Microsoft** ([Entra admin center → App registrations](https://entra.microsoft.com)):
-- *New registration*, single tenant
-- Redirect URI (Web): `https://YOUR-SITE.netlify.app/api/auth/callback/microsoft-entra-id`
-- *Certificates & secrets → New client secret*
-- `AUTH_MICROSOFT_ENTRA_ID_ID` = Application (client) ID, `AUTH_MICROSOFT_ENTRA_ID_SECRET` = the secret value,
-  `AUTH_MICROSOFT_ENTRA_ID_ISSUER` = `https://login.microsoftonline.com/<Directory (tenant) ID>/v2.0`
+- After the first deploy, open the site: it asks you to **set the admin password** (the seeded admin,
+  siddiqur.rahim@enosisbd.com). This form only appears while nobody has a password yet, so do it right away,
+  while the site is still Private.
+- Then add teammates in **Settings → Users & teams** with a role and a starting password (Generate makes one).
+  Give them the password; they can change it under **account menu → Change password**. Admins reset forgotten
+  passwords there too. Five wrong tries lock an account for 15 minutes.
+- `AUTH_SECRET` is optional: without it the app derives its key from the database connection.
+- Google / Microsoft sign-in still work as extra buttons if you ever set their variables
+  (`AUTH_GOOGLE_ID` / `_SECRET`, `AUTH_MICROSOFT_ENTRA_ID_*`, callback `https://YOUR-SITE.netlify.app/api/auth/callback/google`).
 
 ## 3. Create the Netlify site
 
@@ -67,11 +62,9 @@ You need at least one. The callback URLs use your Netlify address, so create the
 | Variable | Value |
 | --- | --- |
 | `DATABASE_URL` | The Neon direct connection string from step 1 |
-| `AUTH_SECRET` | A long random string: run `npx auth secret` locally, or `openssl rand -base64 33` |
+| `AUTH_SECRET` | Optional. A long random string (`npx auth secret`); without it the key comes from the database connection |
 | `AUTH_TRUST_HOST` | `true` |
 | `AUTH_ALLOWED_DOMAIN` | `enosisbd.com` |
-| `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET` | From step 2 (if using Google) |
-| `AUTH_MICROSOFT_ENTRA_ID_ID`, `_SECRET`, `_ISSUER` | From step 2 (if using Microsoft) |
 | `APOLLO_API_KEY`, `LUSHA_API_KEY` | Optional, for enrichment |
 
    Don't set `AUTH_DEV_LOGIN`, and never put these values in the repository.

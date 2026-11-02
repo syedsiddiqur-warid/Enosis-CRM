@@ -172,6 +172,7 @@ export function TopBar({ user, workspaceName, signOutAction }: { user: { name?: 
             </div>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => router.push("/settings")}>Profile & preferences</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => router.push("/account")}>Change password</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => signOutAction()}>Sign out</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

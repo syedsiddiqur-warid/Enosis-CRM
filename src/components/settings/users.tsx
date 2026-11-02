@@ -1,17 +1,25 @@
 "use client";
 
-import { Plus, Trash2, X } from "lucide-react";
+import { KeyRound, Plus, Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Pill, UserAvatar } from "@/components/index/values";
 import { Button, Input, Select } from "@/components/ui/button";
 import { Checkbox, Popover, PopoverContent, PopoverTrigger, Tooltip } from "@/components/ui/overlays";
 import { friendlyDateTime } from "@/lib/crm/dates";
-import { createTeam, deleteTeam, inviteUser, setTeamMember, setUserActive, setUserRole } from "@/lib/crm/settings-actions";
+import { createTeam, deleteTeam, inviteUser, setTeamMember, setUserActive, setUserPassword, setUserRole } from "@/lib/crm/settings-actions";
 import { cn } from "@/lib/utils";
 import { SettingsPage, SettingsSection } from "./settings-ui";
 
-type User = { id: string; name: string | null; email: string; isActive: boolean; lastLoginAt: string | null; roleId: string | null };
+type User = { id: string; name: string | null; email: string; isActive: boolean; lastLoginAt: string | null; roleId: string | null; hasPassword: boolean; locked: boolean };
+
+/** A readable starting password (no look-alike characters) for the admin to hand over. */
+function newPassword() {
+  const chars = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(14));
+  const out = [...bytes].map((b) => chars[b % chars.length]).join("");
+  return /[0-9]/.test(out) ? out : `${out.slice(0, -1)}7`;
+}
 type Role = { id: string; name: string; description: string | null };
 type Team = { id: string; name: string; members: { userId: string; isManager: boolean }[]; layouts: number };
 
@@ -40,7 +48,8 @@ export function UsersSettings({
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
-  const [invite, setInvite] = useState({ email: "", name: "", roleId: roles.find((r) => r.name === "Caller")?.id ?? roles[0]?.id ?? "" });
+  const [invite, setInvite] = useState({ email: "", name: "", password: "", roleId: roles.find((r) => r.name === "Caller")?.id ?? roles[0]?.id ?? "" });
+  const [notice, setNotice] = useState<string | null>(null);
   const [teamName, setTeamName] = useState("");
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>, after?: () => void) =>
     start(async () => {
@@ -55,9 +64,10 @@ export function UsersSettings({
   return (
     <SettingsPage
       title="Users & teams"
-      description={`People sign in with their @${allowedDomain} Google or Microsoft account. Add someone here first to give them a role and team before they sign in; anyone else who signs in gets no role until an admin sets one.`}
+      description={`People sign in with their @${allowedDomain} email and a password. Add each person here with a role and a starting password, and give them the password; they can change it after signing in (account menu → Change password).`}
     >
       {error && <p className="mb-4 rounded-[3px] bg-danger-soft px-3 py-2 text-[13px] text-danger">{error}</p>}
+      {notice && <p className="mb-4 rounded-[3px] bg-[#e5f8f6] px-3 py-2 text-[13px]">{notice}</p>}
 
       <SettingsSection title={`Users (${users.filter((u) => u.isActive).length} active)`}>
         <div className="thin-scroll overflow-x-auto rounded-[4px] border border-line">
@@ -68,6 +78,7 @@ export function UsersSettings({
                 <th className="px-3 py-2">Role</th>
                 <th className="px-3 py-2">Teams</th>
                 <th className="px-3 py-2">Last sign-in</th>
+                <th className="px-3 py-2">Password</th>
                 <th className="px-3 py-2">Status</th>
               </tr>
             </thead>
@@ -107,6 +118,22 @@ export function UsersSettings({
                   </td>
                   <td className="px-3 py-2 text-ink-muted">{u.lastLoginAt ? friendlyDateTime(u.lastLoginAt) : "Never"}</td>
                   <td className="px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      {u.locked ? <Pill label="Locked" color="#f2545b" /> : u.hasPassword ? <Pill label="Set" color="#00bda5" /> : <Pill label="Not set" color="#f5c26b" />}
+                      {isAdmin && (
+                        <SetPassword
+                          user={u}
+                          onSave={(password) =>
+                            run(
+                              () => setUserPassword(u.id, password),
+                              () => setNotice(`New password for ${u.name ?? u.email} saved. Give it to them; they can change it after signing in.`),
+                            )
+                          }
+                        />
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">
                     {isAdmin && u.id !== currentUserId ? (
                       <Button size="sm" variant="ghost" disabled={pending} onClick={() => run(() => setUserActive(u.id, !u.isActive))}>
                         {u.isActive ? "Deactivate" : "Reactivate"}
@@ -127,12 +154,21 @@ export function UsersSettings({
               e.preventDefault();
               run(
                 () => inviteUser(invite),
-                () => setInvite({ ...invite, email: "", name: "" }),
+                () => {
+                  setNotice(invite.password ? `${invite.email} added. Give them their password; they can change it after signing in.` : `${invite.email} added. Set a password for them before they sign in.`);
+                  setInvite({ ...invite, email: "", name: "", password: "" });
+                },
               );
             }}
           >
             <Input className="w-[260px]" value={invite.email} onChange={(e) => setInvite({ ...invite, email: e.target.value })} placeholder={`name@${allowedDomain}`} aria-label="Email" />
             <Input className="w-[200px]" value={invite.name} onChange={(e) => setInvite({ ...invite, name: e.target.value })} placeholder="Full name" aria-label="Full name" />
+            <div className="flex items-center gap-1">
+              <Input className="w-[180px] font-mono" value={invite.password} onChange={(e) => setInvite({ ...invite, password: e.target.value })} placeholder="Starting password" aria-label="Starting password" autoComplete="new-password" />
+              <Button type="button" size="sm" variant="ghost" className="text-link" onClick={() => setInvite({ ...invite, password: newPassword() })}>
+                Generate
+              </Button>
+            </div>
             <Select className="w-[150px]" value={invite.roleId} onChange={(e) => setInvite({ ...invite, roleId: e.target.value })} aria-label="Role">
               {roles.map((r) => (
                 <option key={r.id} value={r.id}>
@@ -251,6 +287,53 @@ function AddMember({ candidates, onPick }: { candidates: User[]; onPick: (id: st
             {u.name ?? u.email}
           </button>
         ))}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Admin: give someone a new password (also unlocks a locked account). */
+function SetPassword({ user, onSave }: { user: User; onSave: (password: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (o) setPassword(newPassword());
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="ghost" className="text-link">
+          <KeyRound /> {user.hasPassword || user.locked ? "Reset" : "Set"}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[300px] p-3 text-[13px]">
+        <div className="mb-2 font-medium">New password for {user.name ?? user.email}</div>
+        <div className="flex gap-1">
+          <Input className="font-mono" value={password} onChange={(e) => setPassword(e.target.value)} aria-label="New password" autoComplete="new-password" />
+          <Button size="sm" variant="ghost" className="text-link" onClick={() => setPassword(newPassword())}>
+            New
+          </Button>
+        </div>
+        <p className="mt-1.5 text-[12px] text-ink-subtle">10+ characters with letters and a number. Copy it before saving and give it to them.</p>
+        <div className="mt-2 flex justify-end gap-2">
+          <Button size="sm" variant="secondary" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={password.length < 10}
+            onClick={() => {
+              onSave(password);
+              setOpen(false);
+            }}
+          >
+            Save password
+          </Button>
+        </div>
       </PopoverContent>
     </Popover>
   );

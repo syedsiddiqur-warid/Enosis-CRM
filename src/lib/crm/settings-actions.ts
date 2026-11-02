@@ -5,6 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/auth";
 import { db } from "@/lib/db";
+import { hashPassword, passwordProblem, verifyPassword } from "@/lib/passwords";
 import type { CrmObject, PropOption } from "./types";
 
 type Result<T = undefined> = { ok: true; data?: T } | { ok: false; error: string };
@@ -83,8 +84,8 @@ export async function setUserActive(userId: string, isActive: boolean): Promise<
   }
 }
 
-/** Pre-create a teammate so they get their role and team on first sign-in (sign-in itself goes through Google/Microsoft). */
-export async function inviteUser(input: { email: string; name: string; roleId: string }): Promise<Result> {
+/** Add a teammate with their role and, usually, a starting password they sign in with. */
+export async function inviteUser(input: { email: string; name: string; roleId: string; password?: string }): Promise<Result> {
   try {
     const me = await requireAdmin();
     const email = input.email.trim().toLowerCase();
@@ -92,9 +93,51 @@ export async function inviteUser(input: { email: string; name: string; roleId: s
     if (!/^[^\s@]+@[^\s@]+$/.test(email)) throw new Error("Enter an email address");
     if (!email.endsWith(`@${domain}`)) throw new Error(`Only @${domain} addresses can sign in`);
     if (await db.user.findUnique({ where: { email } })) throw new Error("That person already has an account");
-    await db.user.create({ data: { email, name: input.name.trim() || null, roleId: input.roleId, preferences: { timeZone: "Asia/Dhaka" } } });
-    await audit(me.id, { addedUser: email });
+    const password = input.password?.trim();
+    const problem = password ? passwordProblem(password) : null;
+    if (problem) throw new Error(problem);
+    await db.user.create({
+      data: {
+        email,
+        name: input.name.trim() || null,
+        roleId: input.roleId,
+        preferences: { timeZone: "Asia/Dhaka" },
+        ...(password ? { passwordHash: await hashPassword(password), passwordSetAt: new Date() } : {}),
+      },
+    });
+    await audit(me.id, { addedUser: email, withPassword: !!password });
     revalidatePath("/settings/users");
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Admin sets (or resets) someone's password, and unlocks the account. */
+export async function setUserPassword(userId: string, password: string): Promise<Result> {
+  try {
+    const me = await requireAdmin();
+    const problem = passwordProblem(password);
+    if (problem) throw new Error(problem);
+    const u = await db.user.update({ where: { id: userId }, data: { passwordHash: await hashPassword(password), passwordSetAt: new Date(), failedLogins: 0, lockedUntil: null } });
+    await audit(me.id, { passwordSetFor: u.email });
+    revalidatePath("/settings/users");
+    return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Anyone can change their own password, after confirming the current one. */
+export async function changeMyPassword(current: string, next: string): Promise<Result> {
+  try {
+    const user = await requireUser();
+    const me = await db.user.findUniqueOrThrow({ where: { id: user.id } });
+    if (me.passwordHash && !(await verifyPassword(current, me.passwordHash))) throw new Error("Your current password is wrong");
+    const problem = passwordProblem(next);
+    if (problem) throw new Error(problem);
+    await db.user.update({ where: { id: me.id }, data: { passwordHash: await hashPassword(next), passwordSetAt: new Date(), failedLogins: 0, lockedUntil: null } });
+    await audit(me.id, { changedOwnPassword: true });
     return { ok: true };
   } catch (e) {
     return fail(e);

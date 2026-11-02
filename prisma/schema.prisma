@@ -95,18 +95,23 @@ enum EmailDirection {
 // ─────────────────────── Users, teams, permissions ───────────────────────
 
 model User {
-  id          String    @id @default(cuid())
-  email       String    @unique
-  name        String?
-  image       String?
-  roleId      String?
-  role        Role?     @relation(fields: [roleId], references: [id])
-  isActive    Boolean   @default(true)
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  roleId        String?
+  role          Role?     @relation(fields: [roleId], references: [id])
+  isActive      Boolean   @default(true)
   // Personal preferences (§7A-K): timezone, dateFormat, theme, homePage, notifications…
-  preferences Json      @default("{}")
-  lastLoginAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  preferences   Json      @default("{}")
+  lastLoginAt   DateTime?
+  // Email + password sign-in: a scrypt hash (never the password), and a short lock after repeated wrong tries
+  passwordHash  String?
+  passwordSetAt DateTime?
+  failedLogins  Int       @default(0)
+  lockedUntil   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   teams           TeamMember[]
   ownedContacts   Contact[]         @relation("ContactOwner")

@@ -9,14 +9,14 @@ export default async function UsersSettingsPage() {
   const user = await currentUser();
   if (!user) redirect("/login");
   const [users, roles, teams, me] = await Promise.all([
-    db.user.findMany({ orderBy: [{ isActive: "desc" }, { name: "asc" }], select: { id: true, name: true, email: true, isActive: true, lastLoginAt: true, roleId: true } }),
+    db.user.findMany({ orderBy: [{ isActive: "desc" }, { name: "asc" }], select: { id: true, name: true, email: true, isActive: true, lastLoginAt: true, roleId: true, passwordHash: true, lockedUntil: true } }),
     db.role.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, description: true } }),
     db.team.findMany({ orderBy: { name: "asc" }, include: { members: { select: { userId: true, isManager: true } }, _count: { select: { layouts: true } } } }),
     db.user.findUnique({ where: { id: user.id }, select: { role: { select: { name: true } } } }),
   ]);
   return (
     <UsersSettings
-      users={users.map((u) => ({ ...u, lastLoginAt: u.lastLoginAt?.toISOString() ?? null }))}
+      users={users.map(({ passwordHash, lockedUntil, ...u }) => ({ ...u, lastLoginAt: u.lastLoginAt?.toISOString() ?? null, hasPassword: !!passwordHash, locked: !!lockedUntil && lockedUntil > new Date() }))}
       roles={roles}
       teams={teams.map((t) => ({ id: t.id, name: t.name, members: t.members, layouts: t._count.layouts }))}
       currentUserId={user.id}
