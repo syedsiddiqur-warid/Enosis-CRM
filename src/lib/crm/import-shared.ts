@@ -93,9 +93,35 @@ export const DYNAMICS_LEAD_COLUMNS: Record<string, ImportTarget> = {
   "Caller / Owner": "prop:callerId",
 };
 
-/** Dynamics wording → this CRM's option values */
+/** Dynamics and lead-tool wording → this CRM's option values */
 export const OPTION_ALIASES: Record<string, Record<string, string>> = {
   callStatus: { "talked to target": "Reached Target", "couldnt reach target": "Never Reached Targets", "couldn't reach target": "Never Reached Targets" },
+  // Seamless.AI, Apollo, ZoomInfo and Lusha seniority levels
+  seniority: {
+    "c-suite": "C-Level",
+    "c suite": "C-Level",
+    cxo: "C-Level",
+    executive: "C-Level",
+    "c-level executive": "C-Level",
+    "vice president": "VP",
+    "vp-level": "VP",
+    head: "Director",
+    "director-level": "Director",
+    "manager-level": "Manager",
+    "senior manager": "Manager",
+    founder: "Owner",
+    "owner/founder": "Owner",
+    partner: "Owner",
+    "mid-level": "Individual contributor",
+    "mid level": "Individual contributor",
+    senior: "Individual contributor",
+    "entry-level": "Individual contributor",
+    "entry level": "Individual contributor",
+    entry: "Individual contributor",
+    "non-manager": "Individual contributor",
+    staff: "Individual contributor",
+    intern: "Individual contributor",
+  },
 };
 
 export interface ImportRowResult {
@@ -122,17 +148,20 @@ const ALIASES: Record<string, string[]> = {
   "prop:phone": ["phone", "business phone", "work phone", "direct phone", "phone number", "company phone"],
   "prop:mobile": ["mobile", "mobile phone", "cell", "cell phone"],
   "prop:jobTitle": ["title", "job title", "position"],
-  "prop:linkedinUrl": ["linkedin", "linkedin url", "person linkedin url", "linkedin profile", "company linkedin url"],
+  "prop:linkedinUrl": ["linkedin", "linkedin url", "person linkedin url", "linkedin profile", "company linkedin url", "li profile url", "linkedin profile url", "li url", "profile url"],
   "prop:name": ["company", "company name", "account name", "organization", "organization name"],
   "prop:domain": ["website", "domain", "company domain", "web site", "url", "company website"],
-  "prop:employees": ["employees", "# employees", "employee count", "company size", "headcount", "no. of employees"],
+  "prop:employees": ["employees", "# employees", "employee count", "company size", "headcount", "no. of employees", "staff count", "number of employees"],
+  "prop:foundedYear": ["founded", "founded year", "founded date", "year founded"],
+  "prop:annualRevenue": ["annual revenue", "revenue"],
+  "prop:listSource": ["list", "list name", "topic"],
   "prop:country": ["country", "country/region", "company country"],
   "prop:state": ["state", "state/province", "province", "region", "state/region", "company state"],
   "prop:city": ["city", "company city"],
   "prop:industry": ["industry"],
   "prop:description": ["description", "about", "short description"],
   "prop:ownerId": ["owner", "contact owner", "company owner", "assigned to"],
-  "prop:timeZone": ["time zone", "timezone"],
+  "prop:timeZone": ["time zone", "timezone", "location timezone"],
   "company:name": ["company", "company name", "account name", "organization", "account"],
   "company:domain": ["company domain", "website", "company website", "domain"],
   phones: ["other phones", "other phone numbers", "phone numbers", "additional phones", "numbers"],
@@ -146,11 +175,58 @@ const norm = (s: string) =>
     .replace(/[^a-z0-9#/]+/g, " ")
     .trim();
 
-/** Best target for a column header, or "skip". Contacts' "Company" columns link companies instead of naming the contact. */
+// Columns that several headers may fill (values are combined)
+const MULTI = new Set(["phones", "note", "prop:otherEmails"]);
+const COMPANY_SIDE = /^(company|organization|account)\s+(.+)$/;
+const CONTACT_SIDE = /^(contact|person|lead)\s+(.+)$/;
+const COMPANY_NAME = ["name", "name cleaned", "legal name"];
+const COMPANY_DOMAIN = ["website", "website domain", "domain", "domain name", "url", "website url"];
+
+/**
+ * Best target for a column header, or "skip". Contacts' "Company" columns link companies instead of naming the contact.
+ * Lead tools (Seamless.AI, Apollo, ZoomInfo, Lusha) prefix fields with "Contact …" / "Company …" and number repeats:
+ * "Email 1" is the email and "Email 2" another email, "Contact Phone 2" an extra number, "Company Phone 1" the company's.
+ */
 export function suggestTarget(header: string, targets: ImportTargetOption[], object: ImportObject, taken: Set<string>): ImportTarget {
   const h = norm(header);
   if (!h) return "skip";
-  const free = (v: string) => !taken.has(v) || v === "phones" || v === "note";
+  const free = (v: string) => !taken.has(v) || MULTI.has(v);
+  const company = h.match(COMPANY_SIDE);
+  // A contact's "Company …" columns describe the company, never the contact
+  if (object === "CONTACT" && company) return companyColumn(company[2], targets, free);
+  const direct = matchHeader(h, targets, object, taken);
+  if (direct !== "skip") return direct;
+  const side = object === "CONTACT" ? h.match(CONTACT_SIDE) : company;
+  let base = side ? side[2] : h;
+  const numbered = base.match(/^(.*\S)\s+([1-9])$/);
+  if (numbered) base = numbered[1];
+  const target = matchHeader(base, targets, object, new Set());
+  // "Phone 2", "Mobile Phone 3": extra numbers; "Email 2" or a second email column: other emails
+  if (numbered && numbered[2] !== "1") return target === "prop:phone" || target === "prop:mobile" ? "phones" : target === "prop:email" && hasTarget(targets, "prop:otherEmails") ? "prop:otherEmails" : "skip";
+  if (target === "prop:email" && !free(target)) return hasTarget(targets, "prop:otherEmails") ? "prop:otherEmails" : "skip";
+  return target !== "skip" && free(target) ? target : "skip";
+}
+
+const hasTarget = (targets: ImportTargetOption[], value: string) => targets.some((t) => t.value === value);
+
+/** A contact import's "Company …" column: the company's name, domain or one of its properties. */
+function companyColumn(rest: string, targets: ImportTargetOption[], free: (v: string) => boolean): ImportTarget {
+  const numbered = rest.match(/^(.*\S)\s+([1-9])$/);
+  if (numbered && numbered[2] !== "1") return "skip";
+  const r = numbered ? numbered[1] : rest;
+  const pick = (v: string) => (free(v) && hasTarget(targets, v) ? v : "skip");
+  if (COMPANY_NAME.includes(r)) return pick("company:name");
+  if (COMPANY_DOMAIN.includes(r)) return pick("company:domain");
+  const hit = targets.find((t) => {
+    if (!t.value.startsWith(COMPANY_PROP_PREFIX)) return false;
+    const name = t.value.slice(COMPANY_PROP_PREFIX.length);
+    return norm(t.label.replace(/^Company › /, "")) === r || name.toLowerCase() === r.replace(/ /g, "") || (ALIASES[`prop:${name}`] ?? []).map(norm).includes(r);
+  });
+  return hit ? pick(hit.value) : "skip";
+}
+
+function matchHeader(h: string, targets: ImportTargetOption[], object: ImportObject, taken: Set<string>): ImportTarget {
+  const free = (v: string) => !taken.has(v) || MULTI.has(v);
   // Contacts: company-only columns ("Industry", "Employees") go to the company when the contact has no such property
   const companyMatch = (h2: string) =>
     object === "CONTACT"

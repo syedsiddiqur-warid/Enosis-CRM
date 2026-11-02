@@ -148,7 +148,7 @@ export function ImportWizard({
   const [review, setReview] = useState<Tally | null>(null);
   const [result, setResult] = useState<(Tally & { segmentId: string | null; cancelled: boolean }) | null>(null);
   const cancelRef = useRef(false);
-  const [options, setOptions] = useState<ImportOptions>({ mode: "upsert", ownerId: null, source: null, batchNumber: null, addMissingOptions: false, segmentName: "", dynamicsTimeZone: "workspace" });
+  const [options, setOptions] = useState<ImportOptions>({ mode: "upsert", ownerId: null, source: null, batchNumber: null, addMissingOptions: true, segmentName: "", dynamicsTimeZone: "workspace" });
   const [useSegment, setUseSegment] = useState(true);
   /** Dynamics items unticked on the review screen, per spreadsheet row */
   const [excluded, setExcluded] = useState<Record<number, string[]>>({});

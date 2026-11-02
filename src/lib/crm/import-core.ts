@@ -251,13 +251,19 @@ function prepare(columns: ImportTarget[], headers: string[], cells: (string | nu
         if (!def || def.isVirtual || NOT_IMPORTABLE.has(def.name)) return;
         const value = parseValue(def, cell, ctx);
         if (value === null || value === undefined) return;
-        (def.isBuiltIn ? out.builtIn : out.custom)[def.name] = value;
+        const into = def.isBuiltIn ? out.builtIn : out.custom;
+        // Several email columns ("Email 2", "Contact Email") add up instead of replacing each other
+        if (def.name === "otherEmails" && into.otherEmails) into.otherEmails = [...new Set(`${into.otherEmails}; ${value}`.split(/\s*;\s*/))].join("; ");
+        else into[def.name] = value;
       }
     } catch (e) {
       errors.push(`${headers[i] || `Column ${i + 1}`}: ${e instanceof Error ? e.message : "invalid"}`);
     }
   });
   if (errors.length) throw new Error(errors.join("; "));
+  // No main email but another one: the first other email becomes the main one
+  const others = (out.builtIn.otherEmails ?? out.custom.otherEmails) as string | undefined;
+  if (!out.builtIn.email && others) out.builtIn.email = others.split(/\s*;\s*/)[0].toLowerCase();
   withLocation(out.builtIn);
   withLocation(out.companyBuiltIn);
   // People who aren't CRM users yet are kept on the timeline, so nothing from the old CRM is lost
