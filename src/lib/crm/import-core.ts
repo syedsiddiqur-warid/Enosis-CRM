@@ -254,6 +254,8 @@ function prepare(columns: ImportTarget[], headers: string[], cells: (string | nu
         const into = def.isBuiltIn ? out.builtIn : out.custom;
         // Several email columns ("Email 2", "Contact Email") add up instead of replacing each other
         if (def.name === "otherEmails" && into.otherEmails) into.otherEmails = [...new Set(`${into.otherEmails}; ${value}`.split(/\s*;\s*/))].join("; ");
+        // "valid" then "97%" for each other email: "valid 97%; accept all 42%"
+        else if (def.name === "otherEmailsCheck" && into.otherEmailsCheck) into.otherEmailsCheck = `${into.otherEmailsCheck}${/^\d+(\.\d+)?%?$/.test(String(value)) ? " " : "; "}${value}`;
         else into[def.name] = value;
       }
     } catch (e) {
@@ -358,6 +360,18 @@ async function importRow(p: Prepared, run: RunContext, row: number): Promise<{ a
     const email = p.builtIn.email as string | undefined;
     if (!email && !p.builtIn.firstName && !p.builtIn.lastName) throw new Error("Needs a first name, last name or email");
     if (email) existing = await db.contact.findFirst({ where: { email, deletedAt: null }, select: { id: true, properties: true } });
+    // No email: the same name at the same company is the same person, so importing a file twice doesn't add them again
+    else if (p.companyDomain || p.companyName) {
+      const company = p.companyDomain
+        ? await db.company.findFirst({ where: { domain: p.companyDomain, deletedAt: null }, select: { id: true } })
+        : await db.company.findFirst({ where: { name: { equals: p.companyName!, mode: "insensitive" }, deletedAt: null }, select: { id: true } });
+      if (company) {
+        const people = await db.contact.findMany({ where: { deletedAt: null, companies: { some: { companyId: company.id } } }, select: { id: true, properties: true, firstName: true, lastName: true } });
+        const key = nameKey((p.builtIn.firstName as string) ?? null, (p.builtIn.lastName as string) ?? null);
+        const hit = people.find((c) => nameKey(c.firstName, c.lastName) === key);
+        if (hit) existing = { id: hit.id, properties: hit.properties };
+      }
+    }
   } else {
     const domain = p.builtIn.domain as string | undefined;
     if (!p.builtIn.name && !domain) throw new Error("Needs a company name or domain");

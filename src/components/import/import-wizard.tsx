@@ -6,16 +6,17 @@ import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import { Button, Input, Label, Select } from "@/components/ui/button";
 import { looksLikeCallerNotes, looksLikeDescription, parseDynamics } from "@/lib/crm/dynamics-parser";
-import { finishImport, importChunk, saveImportTemplate, startImport, validateImport, type ImportRow, type ImportSetup } from "@/lib/crm/import-actions";
+import { countInResearch, finishImport, importChunk, saveImportTemplate, startImport, validateImport, type ImportRow, type ImportSetup } from "@/lib/crm/import-actions";
 import { DYN_CALLER_NOTES, DYN_DESCRIPTION, DYNAMICS_LEAD_COLUMNS, isDynamicsLeadExport, suggestTarget, type ImportObject, type ImportOptions, type ImportRowResult, type ImportTargetOption } from "@/lib/crm/import-shared";
 import type { PropOption, UserLite } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import { DynamicsReview, type ReviewItem } from "./dynamics-review";
 
 const MAX_ROWS = 20000;
-const VALIDATE_CHUNK = 100;
-// Small batches keep each request well inside serverless time limits (Netlify functions: ~10 s)
-const IMPORT_CHUNK = 50;
+// Small batches keep each request well inside serverless time limits (Netlify functions: ~10 s): every contact row
+// finds or creates its company, phones and timeline entries, which adds up on a hosted database
+const VALIDATE_CHUNK = 25;
+const IMPORT_CHUNK = 10;
 // Rows with Dynamics Description / Caller Notes carry dozens of contacts, numbers and calls each
 const DYNAMICS_CHUNK = 2;
 
@@ -26,6 +27,8 @@ interface Sheet {
   rows: ImportRow[];
 }
 interface Tally {
+  /** Records created or updated, to count how many are still with research */
+  ids: string[];
   created: number;
   updated: number;
   skipped: number;
@@ -35,7 +38,7 @@ interface Tally {
   /** Rows whose Description / Caller Notes added contacts, numbers, calls or notes */
   dynamics: number;
 }
-const emptyTally = (): Tally => ({ created: 0, updated: 0, skipped: 0, errors: 0, failed: [], addedOptions: [], dynamics: 0 });
+const emptyTally = (): Tally => ({ ids: [], created: 0, updated: 0, skipped: 0, errors: 0, failed: [], addedOptions: [], dynamics: 0 });
 
 /** Minimal RFC 4180 CSV parser: quotes, escaped quotes, CRLF, BOM; comma, semicolon or tab delimited. */
 function parseCsv(text: string): string[][] {
@@ -146,7 +149,7 @@ export function ImportWizard({
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [review, setReview] = useState<Tally | null>(null);
-  const [result, setResult] = useState<(Tally & { segmentId: string | null; cancelled: boolean }) | null>(null);
+  const [result, setResult] = useState<(Tally & { segmentId: string | null; cancelled: boolean; inResearch: number }) | null>(null);
   const cancelRef = useRef(false);
   const [options, setOptions] = useState<ImportOptions>({ mode: "upsert", ownerId: null, source: null, batchNumber: null, addMissingOptions: true, segmentName: "", dynamicsTimeZone: "workspace" });
   const [useSegment, setUseSegment] = useState(true);
@@ -238,6 +241,7 @@ export function ImportWizard({
         t.failed.push(r);
       } else {
         t[r.action]++;
+        if (r.id && (r.action === "created" || r.action === "updated")) t.ids.push(r.id);
         if (r.message?.includes("Dynamics:")) t.dynamics++;
       }
     }
@@ -251,7 +255,9 @@ export function ImportWizard({
     const t = emptyTally();
     try {
       for (let i = 0; i < sheet!.rows.length; i += VALIDATE_CHUNK) {
-        const res = await validateImport(setup(), sheet!.rows.slice(i, i + VALIDATE_CHUNK));
+        const chunk = sheet!.rows.slice(i, i + VALIDATE_CHUNK);
+        // One retry for a slow or interrupted request
+        const res = (await validateImport(setup(), chunk).catch(() => null)) ?? (await validateImport(setup(), chunk));
         if (!res.ok) throw new Error(res.error);
         add(t, res.data!.results, res.data!.addedOptions);
         setProgress(Math.min(1, (i + VALIDATE_CHUNK) / sheet!.rows.length));
@@ -285,22 +291,28 @@ export function ImportWizard({
         cancelled = true;
         break;
       }
-      const res = await importChunk(
-        jobId,
-        sheet!.rows.slice(i, i + size).map((r) => (excluded[r.row]?.length ? { ...r, exclude: excluded[r.row] } : r)),
-      );
-      if (!res.ok) {
-        // A whole chunk failed (e.g. the server restarted): count its rows as errors and keep going
-        add(
-          t,
-          sheet!.rows.slice(i, i + size).map((r) => ({ row: r.row, action: "error" as const, message: res.error })),
-          [],
-        );
-      } else add(t, res.data!.results, res.data!.addedOptions);
+      const chunk = sheet!.rows.slice(i, i + size).map((r) => (excluded[r.row]?.length ? { ...r, exclude: excluded[r.row] } : r));
+      const res = await importChunk(jobId, chunk).catch(() => null);
+      if (res?.ok) add(t, res.data!.results, res.data!.addedOptions);
+      else {
+        // The batch failed (too slow, or the server restarted): try its rows one by one. Rows saved before the failure
+        // are matched by email / domain the second time, so they're updated rather than added twice.
+        for (const row of chunk) {
+          const one = await importChunk(jobId, [row]).catch((e: unknown) => ({ ok: false as const, error: e instanceof Error ? e.message : "The server didn't answer" }));
+          if (one.ok) add(t, one.data!.results, one.data!.addedOptions);
+          else add(t, [{ row: row.row, action: "error" as const, message: one.error }], []);
+        }
+      }
       setProgress(Math.min(1, (i + size) / sheet!.rows.length));
     }
     await finishImport(jobId, { created: t.created, updated: t.updated, skipped: t.skipped, errors: t.errors, addedOptions: t.addedOptions.length, cancelled });
-    setResult({ ...t, segmentId, cancelled });
+    // Records whose companies are still with research don't show in the Companies / Contacts lists yet
+    let inResearch = 0;
+    for (let i = 0; i < t.ids.length; i += 1000) {
+      const res = await countInResearch(object, t.ids.slice(i, i + 1000)).catch(() => null);
+      if (res?.ok) inResearch += res.data!.inResearch;
+    }
+    setResult({ ...t, segmentId, cancelled, inResearch });
     setStep("done");
     router.refresh();
   }
@@ -680,6 +692,17 @@ export function ImportWizard({
             {result.addedOptions.length > 0 && ` Added ${result.addedOptions.length} new dropdown values.`}
             {result.dynamics > 0 && ` Dynamics targets, numbers, calls and notes were added for ${result.dynamics.toLocaleString()} ${result.dynamics === 1 ? "record" : "records"}.`}
           </p>
+          {result.inResearch > 0 && (
+            <p className="max-w-[760px] rounded-[3px] bg-[#f4f5fd] px-3 py-2 text-[13px]">
+              <strong>{result.inResearch.toLocaleString()}</strong> of the imported {plural}{" "}
+              {object === "CONTACT" ? "belong to companies that are still in the Research Queue" : "are new and wait in the Research Queue"}, so the {plural} list hides them until a
+              researcher marks {object === "CONTACT" ? "their company" : "them"} ready to call. They are all saved: see them with{" "}
+              <Link href={`/${plural}?research=1`} className="text-link hover:underline">
+                Include {object === "CONTACT" ? "contacts of companies" : "companies"} in research
+              </Link>
+              {result.segmentId ? " or in the import segment below" : ""}.
+            </p>
+          )}
           <div className="flex flex-wrap gap-2">
             {result.segmentId && (
               <Button variant="primary" asChild>

@@ -8,6 +8,7 @@ import { requireUser } from "@/auth";
 import { db } from "@/lib/db";
 import { COMPANY_PROP_PREFIX, DYN_DESCRIPTION, type ImportChunkResult, type ImportObject, type ImportOptions, type ImportTarget } from "./import-shared";
 import { canImport, fail, json, runRows, type ImportRow, type JobMapping, type Result } from "./import-core";
+import { inResearchWhere, outOfResearch } from "./in-research";
 
 export type { ImportRow };
 
@@ -133,6 +134,21 @@ export async function deleteImportTemplate(id: string): Promise<Result> {
     await db.importMappingTemplate.delete({ where: { id } });
     revalidatePath("/settings/import");
     return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/** Of these imported records, how many are still with research, so the Companies / Contacts lists hide them for now. */
+export async function countInResearch(object: ImportObject, ids: string[]): Promise<Result<{ inResearch: number }>> {
+  try {
+    await requireUser();
+    const some = ids.slice(0, 1000);
+    const inResearch =
+      object === "COMPANY"
+        ? await db.company.count({ where: { id: { in: some }, deletedAt: null, ...inResearchWhere } })
+        : await db.contact.count({ where: { id: { in: some }, deletedAt: null, NOT: outOfResearch("CONTACT")! } });
+    return { ok: true, data: { inResearch } };
   } catch (e) {
     return fail(e);
   }

@@ -162,6 +162,10 @@ const ALIASES: Record<string, string[]> = {
   "prop:description": ["description", "about", "short description"],
   "prop:ownerId": ["owner", "contact owner", "company owner", "assigned to"],
   "prop:timeZone": ["time zone", "timezone", "location timezone"],
+  "prop:emailValidation": ["email 1 validation", "email validation", "email status", "email verification", "email verified"],
+  "prop:emailScore": ["email 1 total ai", "email total ai", "email score", "email confidence"],
+  "prop:otherEmailsCheck": ["email 2 validation", "email 2 total ai", "email 3 validation", "email 3 total ai", "contact email validation", "contact email total ai"],
+  "prop:mobileScore": ["contact mobile phone 1 total ai", "mobile phone 1 total ai", "mobile phone total ai", "mobile total ai", "mobile score"],
   "company:name": ["company", "company name", "account name", "organization", "account"],
   "company:domain": ["company domain", "website", "company website", "domain"],
   phones: ["other phones", "other phone numbers", "phone numbers", "additional phones", "numbers"],
@@ -176,7 +180,7 @@ const norm = (s: string) =>
     .trim();
 
 // Columns that several headers may fill (values are combined)
-const MULTI = new Set(["phones", "note", "prop:otherEmails"]);
+const MULTI = new Set(["phones", "note", "prop:otherEmails", "prop:otherEmailsCheck"]);
 const COMPANY_SIDE = /^(company|organization|account)\s+(.+)$/;
 const CONTACT_SIDE = /^(contact|person|lead)\s+(.+)$/;
 const COMPANY_NAME = ["name", "name cleaned", "legal name"];
