@@ -7,6 +7,7 @@ import {
   CheckSquare,
   ChevronsLeft,
   ChevronsRight,
+  Database,
   FlaskConical,
   Home,
   ListFilter,
@@ -35,10 +36,11 @@ const SECTIONS = [
       { href: "/segments", label: "Segments", icon: ListFilter },
     ],
   },
-  // In the order work flows: research → handover, then campaigns → calling → follow-up
+  // In the order work flows: import → research → handover, then campaigns → calling → follow-up
   {
     title: "Research",
     items: [
+      { href: "/data-management", label: "Data Management", icon: Database },
       { href: "/research", label: "Research Queue", icon: FlaskConical },
       { href: "/handover", label: "Handover", icon: ArrowRightLeft },
     ],

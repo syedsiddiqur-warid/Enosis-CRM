@@ -8,23 +8,11 @@ import { Pill } from "@/components/index/values";
 import { Button } from "@/components/ui/button";
 import { friendlyDateTime } from "@/lib/crm/dates";
 import { deleteImportTemplate } from "@/lib/crm/import-actions";
+import type { ImportJobRow } from "@/lib/crm/import-history";
 import { SettingsPage, SettingsSection } from "./settings-ui";
 
 type Template = { id: string; name: string; object: "CONTACT" | "COMPANY"; mapped: number; columns: number; createdAt: string };
-type Job = {
-  id: string;
-  object: "CONTACT" | "COMPANY";
-  fileName: string;
-  status: string;
-  by: string | null;
-  at: string;
-  totalRows: number | null;
-  created: number;
-  updated: number;
-  skipped: number;
-  errors: number;
-  segmentId: string | null;
-};
+type Job = ImportJobRow;
 
 const STATUS: Record<string, [string, string]> = {
   completed: ["Completed", "#00bda5"],
@@ -133,56 +121,61 @@ export function ImportSettings({ templates, jobs }: { templates: Template[]; job
       </SettingsSection>
 
       <SettingsSection title="Import history">
-        {jobs.length ? (
-          <div className="thin-scroll overflow-x-auto rounded-[4px] border border-line">
-            <table className="w-full min-w-[820px] text-[13px]">
-              <thead className="bg-surface-muted text-left text-[11px] uppercase tracking-wide">
-                <tr>
-                  <th className="px-3 py-2">File</th>
-                  <th className="px-3 py-2">Status</th>
-                  <th className="px-3 py-2 text-right">Rows</th>
-                  <th className="px-3 py-2 text-right">Created</th>
-                  <th className="px-3 py-2 text-right">Updated</th>
-                  <th className="px-3 py-2 text-right">Skipped</th>
-                  <th className="px-3 py-2 text-right">Errors</th>
-                  <th className="px-3 py-2">By</th>
-                  <th className="px-3 py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {jobs.map((j) => (
-                  <tr key={j.id} className="border-t border-line">
-                    <td className="max-w-[260px] px-3 py-2">
-                      <div className="truncate font-medium">{j.fileName}</div>
-                      <div className="text-[12px] capitalize text-ink-subtle">
-                        {plural(j.object)} · {friendlyDateTime(j.at)}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2">
-                      <Pill label={STATUS[j.status]?.[0] ?? j.status} color={STATUS[j.status]?.[1]} />
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">{j.totalRows ?? "--"}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{j.created}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{j.updated}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{j.skipped}</td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${j.errors ? "text-danger" : ""}`}>{j.errors}</td>
-                    <td className="px-3 py-2 text-ink-muted">{j.by ?? "--"}</td>
-                    <td className="px-3 py-2 text-right">
-                      {j.segmentId && (
-                        <Link href={`/segments/${j.segmentId}`} className="text-link hover:underline">
-                          View records
-                        </Link>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="text-[13px] text-ink-subtle">No imports yet.</p>
-        )}
+        <ImportHistoryTable jobs={jobs} />
       </SettingsSection>
     </SettingsPage>
+  );
+}
+
+/** Imports, newest first: file imports and one line per Intake API tool per day. */
+export function ImportHistoryTable({ jobs }: { jobs: Job[] }) {
+  return jobs.length ? (
+    <div className="thin-scroll overflow-x-auto rounded-[4px] border border-line">
+      <table className="w-full min-w-[820px] text-[13px]">
+        <thead className="bg-surface-muted text-left text-[11px] uppercase tracking-wide">
+          <tr>
+            <th className="px-3 py-2">File</th>
+            <th className="px-3 py-2">Status</th>
+            <th className="px-3 py-2 text-right">Rows</th>
+            <th className="px-3 py-2 text-right">Created</th>
+            <th className="px-3 py-2 text-right">Updated</th>
+            <th className="px-3 py-2 text-right">Skipped</th>
+            <th className="px-3 py-2 text-right">Errors</th>
+            <th className="px-3 py-2">By</th>
+            <th className="px-3 py-2" />
+          </tr>
+        </thead>
+        <tbody>
+          {jobs.map((j) => (
+            <tr key={j.id} className="border-t border-line">
+              <td className="max-w-[260px] px-3 py-2">
+                <div className="truncate font-medium">{j.fileName}</div>
+                <div className="text-[12px] capitalize text-ink-subtle">
+                  {plural(j.object)} · {friendlyDateTime(j.at)}
+                </div>
+              </td>
+              <td className="px-3 py-2">
+                <Pill label={STATUS[j.status]?.[0] ?? j.status} color={STATUS[j.status]?.[1]} />
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">{j.totalRows ?? "--"}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{j.created}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{j.updated}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{j.skipped}</td>
+              <td className={`px-3 py-2 text-right tabular-nums ${j.errors ? "text-danger" : ""}`}>{j.errors}</td>
+              <td className="px-3 py-2 text-ink-muted">{j.by ?? "--"}</td>
+              <td className="px-3 py-2 text-right">
+                {j.segmentId && (
+                  <Link href={`/segments/${j.segmentId}`} className="text-link hover:underline">
+                    View records
+                  </Link>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  ) : (
+    <p className="text-[13px] text-ink-subtle">No imports yet.</p>
   );
 }

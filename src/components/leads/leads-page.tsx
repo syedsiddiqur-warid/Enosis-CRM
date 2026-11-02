@@ -7,6 +7,9 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { ReasonDialog } from "./reason-dialog";
+import { BulkAssignDialog, useBulkRunner } from "@/components/bulk/bulk-tools";
+import { MAX_DIRECT, type BulkTarget } from "@/lib/crm/bulk";
+import { resolveLeadSelection } from "@/lib/crm/bulk-actions";
 import { LocalTime, Pill, UserAvatar } from "@/components/index/values";
 import { Pager } from "@/components/research/research-list";
 import { Button, Input, Label, Select } from "@/components/ui/button";
@@ -31,6 +34,9 @@ const daysAgo = (iso: string | null) => {
 const age = (days: number) => (days >= 365 ? `${Math.floor(days / 365)}y` : days >= 60 ? `${Math.floor(days / 30)}mo` : `${Math.max(0, days)}d`);
 const ageSince = (iso: string | null) => (iso ? age(Math.floor((Date.now() - new Date(iso).getTime()) / 864e5)) : "");
 const isOpen = (stage: string) => OPEN_LEAD_STAGES.includes(stage as LeadStage);
+
+/** Ids per request for stage moves and quick edits, well under the request size limit */
+const IDS_PER_REQUEST = 2000;
 
 export function LeadsPage({ data }: { data: LeadsData }) {
   const router = useRouter();
@@ -77,12 +83,16 @@ export function LeadsPage({ data }: { data: LeadsData }) {
     if (stage === "Disqualified" && !reason) return setDisqualifying(ids);
     setMoved((m) => ({ ...m, ...Object.fromEntries(ids.map((id) => [id, stage])) }));
     start(async () => {
-      const res = await moveLeads(ids, stage, reason);
-      if (!res.ok) {
-        setMoved({});
-        return setMessage({ text: res.error });
+      let moved = 0;
+      for (let i = 0; i < ids.length; i += IDS_PER_REQUEST) {
+        const res = await moveLeads(ids.slice(i, i + IDS_PER_REQUEST), stage, reason);
+        if (!res.ok) {
+          setMoved({});
+          return setMessage({ text: moved ? `${moved.toLocaleString()} leads moved, then: ${res.error}` : res.error });
+        }
+        moved += res.data!.moved;
       }
-      setMessage({ text: ids.length === 1 ? `Moved to ${stage}` : `${res.data!.moved} leads moved to ${stage}` });
+      setMessage({ text: ids.length === 1 ? `Moved to ${stage}` : `${moved.toLocaleString()} leads moved to ${stage}` });
       router.refresh();
     });
   };
@@ -229,7 +239,19 @@ export function LeadsPage({ data }: { data: LeadsData }) {
           data={data}
           rows={rows}
           onMove={move}
-          onUpdate={(ids, patch, done) => run(() => updateLeads(ids, patch), done)}
+          onUpdate={(ids, patch, done) =>
+            run(async () => {
+              for (let i = 0; i < ids.length; i += IDS_PER_REQUEST) {
+                const res = await updateLeads(ids.slice(i, i + IDS_PER_REQUEST), patch);
+                if (!res.ok) return res;
+              }
+              return { ok: true as const };
+            }, done)
+          }
+          onBulkDone={(text, undo) => {
+            setMessage({ text, undo });
+            router.refresh();
+          }}
           onDelete={(ids) =>
             run(
               () => deleteLeads(ids),
@@ -367,23 +389,60 @@ function LeadList({
   onMove,
   onUpdate,
   onDelete,
+  onBulkDone,
 }: {
   data: LeadsData;
   rows: LeadRow[];
   onMove: (ids: string[], stage: string) => void;
   onUpdate: (ids: string[], patch: Parameters<typeof updateLeads>[1], done: string) => void;
   onDelete: (ids: string[]) => void;
+  onBulkDone: (text: string, undo?: () => void) => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  useEffect(() => setSelected(new Set()), [data.rows]);
+  /** Every lead matching the filters (all pages) is selected */
+  const [matching, setMatching] = useState<BulkTarget[] | null>(null);
+  const [selectingAll, setSelectingAll] = useState(false);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const bulk = useBulkRunner("LEAD", { singular: "lead", plural: "leads" });
+  useEffect(() => {
+    setSelected(new Set());
+    setMatching(null);
+  }, [data.rows]);
+  async function selectAllMatching() {
+    setSelectingAll(true);
+    const res = await resolveLeadSelection({ ...data.filters, stage: data.filters.stage || undefined });
+    setSelectingAll(false);
+    if (!res.ok) return onBulkDone(res.error);
+    setMatching(res.data!.targets);
+    setSelected(new Set(res.data!.targets.map((t) => t.id)));
+  }
+  async function targets() {
+    if (matching) return matching;
+    const res = await resolveLeadSelection({ ids: [...selected] });
+    if (!res.ok) {
+      onBulkDone(res.error);
+      return null;
+    }
+    return res.data!.targets;
+  }
   const ids = [...selected];
   const allOnPage = rows.length > 0 && rows.every((r) => selected.has(r.id));
   return (
     <>
       {selected.size > 0 && (
         <div className="flex flex-wrap items-center gap-2 border-b border-line bg-[#f0f9fb] px-6 py-2 text-[13px]">
-          <span className="font-medium">{selected.size} selected</span>
-          <button className="flex items-center gap-1 text-ink-muted hover:text-ink" onClick={() => setSelected(new Set())}>
+          <span className="font-medium">{selected.size.toLocaleString()} selected</span>
+          {matching ? (
+            <span className="text-ink-muted">All matching leads are selected</span>
+          ) : (
+            allOnPage &&
+            data.total > selected.size && (
+              <button className="text-link hover:underline" disabled={selectingAll} onClick={selectAllMatching}>
+                {selectingAll ? "Selecting…" : `Select all ${data.total.toLocaleString()} matching`}
+              </button>
+            )
+          )}
+          <button className="flex items-center gap-1 text-ink-muted hover:text-ink" onClick={() => (setSelected(new Set()), setMatching(null))}>
             <X className="size-3.5" /> Clear
           </button>
           <span className="mx-1 h-5 w-px bg-line" />
@@ -407,6 +466,9 @@ function LeadList({
               </option>
             ))}
           </Select>
+          <Button size="sm" variant="ghost" className="text-link" onClick={() => setAssignOpen(true)}>
+            Share out…
+          </Button>
           <Select className="h-7 w-[120px]" value="" onChange={(e) => e.target.value && onUpdate(ids, { label: e.target.value === "__none__" ? null : e.target.value }, "Label set")} aria-label="Set label">
             <option value="">Label…</option>
             {FEEDBACK_RATINGS.map((r) => (
@@ -414,11 +476,28 @@ function LeadList({
             ))}
             <option value="__none__">No label</option>
           </Select>
-          <Button size="sm" variant="ghost" className="text-danger" onClick={() => onDelete(ids)}>
-            <Trash2 /> Delete
-          </Button>
+          {selected.size <= MAX_DIRECT && (
+            <Button size="sm" variant="ghost" className="text-danger" onClick={() => onDelete(ids)}>
+              <Trash2 /> Delete
+            </Button>
+          )}
         </div>
       )}
+      <BulkAssignDialog
+        open={assignOpen}
+        onOpenChange={setAssignOpen}
+        count={selected.size}
+        fields={[{ name: "ownerId", label: "Owner" }]}
+        users={data.users}
+        loadTargets={targets}
+        onApply={async (_field, plan, list) => {
+          const out = await bulk.run("Assigning owners", list.map((t) => ({ id: t.id, changes: { ownerId: plan.get(t.id) ?? null } })));
+          setSelected(new Set());
+          setMatching(null);
+          onBulkDone(out.message, out.batchId ? () => void bulk.undo(out.batchId!).then((m) => onBulkDone(m)) : undefined);
+        }}
+      />
+      {bulk.dialog}
       <div className="thin-scroll min-h-0 flex-1 overflow-auto">
         <table className="w-full min-w-[1150px] border-collapse text-[13px]">
           <thead className="sticky top-0 z-10 bg-surface-muted text-left text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">

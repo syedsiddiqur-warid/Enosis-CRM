@@ -17,7 +17,7 @@ export function parseSegmentGroups(filters: unknown): FilterGroup[] {
 /** Stored exclusions, tolerating missing or partial values. */
 export function parseExclusions(v: unknown): SegmentExclusions {
   const e = (v ?? {}) as Partial<SegmentExclusions>;
-  return { segments: Array.isArray(e.segments) ? e.segments.map(String) : [], records: Array.isArray(e.records) ? e.records.map(String) : [] };
+  return { segments: Array.isArray(e.segments) ? e.segments.map(String) : [], records: Array.isArray(e.records) ? e.records.map(String) : [], ...(e.research ? { research: true } : {}) };
 }
 
 /** Everything the filter engine needs: property definitions, related-row fields and segment definitions. */

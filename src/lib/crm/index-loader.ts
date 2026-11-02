@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { fromBase64Url } from "@/lib/utils";
 import { loadQueryContext } from "./context";
+import { inResearchWhere, outOfResearch } from "./in-research";
 import { getPropertyGroups } from "./properties";
 import { buildWhere, fetchRows } from "./query";
 import { segmentSummaries } from "./segments";
@@ -16,6 +17,8 @@ export interface IndexSearchParams {
   size?: string;
   st?: string;
   create?: string;
+  /** "1": also show companies still in research (and their contacts) */
+  research?: string;
 }
 
 /** Per-user tab state for an object's index page (UserUiState "views:<OBJECT>"). */
@@ -86,8 +89,17 @@ export async function loadIndex(object: CrmObject, sp: IndexSearchParams, userId
   const page = Math.max(1, Number(sp.page) || 1);
   const q = sp.q ?? "";
 
-  const where = buildWhere(object, active.systemKey, state, q, ctx);
-  const { rows, total } = await fetchRows(object, where, state.sort, (page - 1) * pageSize, pageSize, defs);
+  const includeResearch = sp.research === "1";
+  const where = buildWhere(object, active.systemKey, state, q, ctx, includeResearch);
+  const [{ rows, total }, inResearch] = await Promise.all([
+    fetchRows(object, where, state.sort, (page - 1) * pageSize, pageSize, defs),
+    // How many records the default list leaves out, for the "Include companies in research" toggle
+    object === "COMPANY"
+      ? db.company.count({ where: { deletedAt: null, ...inResearchWhere } })
+      : object === "CONTACT"
+        ? db.contact.count({ where: { deletedAt: null, NOT: outOfResearch("CONTACT")! } })
+        : 0,
+  ]);
 
   const myTeams = (me?.teams ?? []).map((t) => t.team);
   const teams = isAdmin ? await db.team.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }) : myTeams;
@@ -100,6 +112,8 @@ export async function loadIndex(object: CrmObject, sp: IndexSearchParams, userId
     dirty: !!override,
     rows,
     total,
+    includeResearch,
+    inResearch,
     page,
     pageSize,
     q,

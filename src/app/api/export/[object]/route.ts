@@ -58,7 +58,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ object: 
     // Reuse the index loader to resolve the view + overrides, then fetch every row
     const base = await loadIndex(object, { ...sp, page: "1", size: "25" }, session.user.id);
     const active = base.views.find((v) => v.id === base.activeViewId)!;
-    where = buildWhere(object, active.systemKey, base.state, base.q, ctx);
+    where = buildWhere(object, active.systemKey, base.state, base.q, ctx, sp.research === "1");
     sort = base.state.sort;
     columns = base.state.columns.map((c) => c.property);
     label = active.name;

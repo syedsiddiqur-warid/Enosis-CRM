@@ -17,6 +17,7 @@ export function ViewInsightsDrawer({
   systemKey,
   state,
   q,
+  includeResearch = false,
   onDrill,
 }: {
   open: boolean;
@@ -25,16 +26,17 @@ export function ViewInsightsDrawer({
   systemKey: string | null;
   state: ViewState;
   q: string;
+  includeResearch?: boolean;
   onDrill: (c: FilterCondition) => void;
 }) {
   const [result, setResult] = useState<{ data: Insights | null; error: string | null; loading: boolean }>({ data: null, error: null, loading: false });
-  const key = JSON.stringify([object, systemKey, state.quick, state.advanced, q]);
+  const key = JSON.stringify([object, systemKey, state.quick, state.advanced, q, includeResearch]);
   useEffect(() => {
     if (!open) return;
     let live = true;
     setResult((r) => ({ ...r, loading: true, error: null }));
-    const [o, sk, quick, advanced, query] = JSON.parse(key) as [CrmObject, string | null, ViewState["quick"], ViewState["advanced"], string];
-    viewInsights(o, sk, { quick, advanced, chips: [], columns: [], sort: null }, query).then((res) => {
+    const [o, sk, quick, advanced, query, withResearch] = JSON.parse(key) as [CrmObject, string | null, ViewState["quick"], ViewState["advanced"], string, boolean];
+    viewInsights(o, sk, { quick, advanced, chips: [], columns: [], sort: null }, query, withResearch).then((res) => {
       if (live) setResult(res.ok ? { data: res.data, error: null, loading: false } : { data: null, error: res.error, loading: false });
     });
     return () => {

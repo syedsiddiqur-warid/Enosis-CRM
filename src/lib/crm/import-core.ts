@@ -298,7 +298,8 @@ const researcherFor = (options: ImportOptions, row: number) => (options.research
 
 const isEmpty = (v: unknown) => v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length);
 
-async function findOrCreateCompany(p: Prepared, run: RunContext): Promise<string | null> {
+/** A contact row's company: matched by domain or name, or created on the Research Queue (shared out like company imports). */
+async function findOrCreateCompany(p: Prepared, run: RunContext, row: number): Promise<string | null> {
   if (!p.companyName && !p.companyDomain) return null;
   const existing =
     (p.companyDomain ? await db.company.findFirst({ where: { domain: p.companyDomain, deletedAt: null } }) : null) ??
@@ -323,6 +324,7 @@ async function findOrCreateCompany(p: Prepared, run: RunContext): Promise<string
   const c = await db.company.create({
     data: {
       ownerId: run.options.ownerId,
+      researcherId: researcherFor(run.options, row),
       source: run.options.source,
       batchNumber: run.options.batchNumber,
       lifecycleStage: "Lead",
@@ -373,7 +375,7 @@ async function importRow(p: Prepared, run: RunContext, row: number): Promise<{ a
     return { action: "skipped", id: existing.id, message: object === "CONTACT" ? "A contact with this email already exists" : `This company already exists${flags ? ` (${flags})` : ""}` };
   if (!existing && options.mode === "update") return { action: "skipped", message: "No matching record to update" };
 
-  const companyId = object === "CONTACT" ? await findOrCreateCompany(p, run) : null;
+  const companyId = object === "CONTACT" ? await findOrCreateCompany(p, run, row) : null;
   if (run.dryRun) {
     const message = [flags && `already in the CRM: ${flags}`, p.warnings.length && `not CRM users yet: ${p.warnings.join(", ")}`].filter(Boolean).join(" · ");
     return { action: existing ? "updated" : "created", id: existing?.id, message: message || undefined };

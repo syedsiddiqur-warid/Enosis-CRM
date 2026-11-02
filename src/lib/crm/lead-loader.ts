@@ -45,11 +45,10 @@ const leadSelect = {
   company: { select: { id: true, name: true, domain: true, timeZone: true, followGroup: true, followScore: true } },
 } satisfies Prisma.LeadSelect;
 
-export async function loadLeads(userId: string, sp: LeadSearchParams) {
-  const view = sp.view === "list" ? "list" : "board";
+/** The filter the leads page shows: owner (default: mine), label, search and stage (or stale). */
+export function leadWhere(userId: string, sp: LeadSearchParams): Prisma.LeadWhereInput {
   const q = sp.q?.trim() ?? "";
   const stage = sp.stage === "stale" || LEAD_STAGE_NAMES.includes(sp.stage as LeadStage) ? sp.stage! : "";
-  const page = Math.max(1, Number(sp.page) || 1);
   // Default: my leads
   const owner = sp.owner ?? "__me__";
   const base: Prisma.LeadWhereInput = {
@@ -67,7 +66,19 @@ export async function loadLeads(userId: string, sp: LeadSearchParams) {
         }
       : {}),
   };
-  const where: Prisma.LeadWhereInput = stage === "stale" ? { AND: [base, staleWhere()] } : stage ? { ...base, stage } : base;
+  return stage === "stale" ? { AND: [base, staleWhere()] } : stage ? { ...base, stage } : base;
+
+}
+
+export async function loadLeads(userId: string, sp: LeadSearchParams) {
+  const view = sp.view === "list" ? "list" : "board";
+  const q = sp.q?.trim() ?? "";
+  const stage = sp.stage === "stale" || LEAD_STAGE_NAMES.includes(sp.stage as LeadStage) ? sp.stage! : "";
+  const page = Math.max(1, Number(sp.page) || 1);
+  const owner = sp.owner ?? "__me__";
+  // Stage counts and the stale count use every filter except the stage
+  const base = leadWhere(userId, { ...sp, stage: undefined });
+  const where = leadWhere(userId, sp);
 
   const boardStages = stage && stage !== "stale" ? [stage] : LEAD_STAGE_NAMES;
   const [leads, total, byStage, stale, users, hasLeads, uncreated] = await Promise.all([

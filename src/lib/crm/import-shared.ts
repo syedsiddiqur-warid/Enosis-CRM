@@ -135,7 +135,7 @@ const ALIASES: Record<string, string[]> = {
   "prop:timeZone": ["time zone", "timezone"],
   "company:name": ["company", "company name", "account name", "organization", "account"],
   "company:domain": ["company domain", "website", "company website", "domain"],
-  phones: ["other phones", "phone numbers", "additional phones", "numbers"],
+  phones: ["other phones", "other phone numbers", "phone numbers", "additional phones", "numbers"],
   note: ["notes", "note", "comments"],
   [DYN_CALLER_NOTES]: ["caller notes", "caller note", "call notes", "call history"],
 };

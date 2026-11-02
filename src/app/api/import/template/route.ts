@@ -1,15 +1,24 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
-import { importTargets, sampleValue, type ImportObject } from "@/lib/crm/import-shared";
+import { COMPANY_PROP_PREFIX, CONTACT_PROP_PREFIX, importTargets, sampleValue, type ImportObject } from "@/lib/crm/import-shared";
 import { getPropDefs } from "@/lib/crm/properties";
 
 const OBJECTS: Record<string, ImportObject> = { contacts: "CONTACT", companies: "COMPANY" };
 
-/** Columns every template starts with, in this order; the rest follow in property-group order. */
+/** Columns every template starts with, in this order; the rest follow in property-group order.
+ *  Each template also fills the other side: a contact row names and describes its company, a company row its lead person. */
+const co = (n: string) => `${COMPANY_PROP_PREFIX}${n}`;
+const person = (n: string) => `${CONTACT_PROP_PREFIX}${n}`;
 const FIRST: Record<ImportObject, string[]> = {
-  CONTACT: ["prop:firstName", "prop:lastName", "prop:email", "prop:jobTitle", "prop:phone", "prop:mobile", "company:name", "company:domain", "prop:linkedinUrl", "prop:city", "prop:country", "prop:timeZone", "prop:ownerId"],
-  COMPANY: ["prop:name", "prop:domain", "prop:phone", "phones", "prop:industry", "prop:employees", "prop:city", "prop:state", "prop:country", "prop:timeZone", "prop:source", "prop:listSource", "prop:ownerId"],
+  CONTACT: [
+    "prop:firstName", "prop:lastName", "prop:email", "prop:jobTitle", "prop:phone", "prop:mobile", "prop:linkedinUrl", "prop:city", "prop:country", "prop:timeZone", "prop:ownerId",
+    "company:name", "company:domain", co("phone"), co("industry"), co("employees"), co("city"), co("state"), co("country"), co("source"),
+  ],
+  COMPANY: [
+    "prop:name", "prop:domain", "prop:phone", "phones", "prop:industry", "prop:employees", "prop:city", "prop:state", "prop:country", "prop:timeZone", "prop:source", "prop:listSource", "prop:ownerId",
+    person("firstName"), person("lastName"), person("jobTitle"), person("email"), person("phone"), person("linkedinUrl"),
+  ],
 };
 
 function csvCell(v: string) {
@@ -25,9 +34,10 @@ export async function GET(req: Request) {
   const object = OBJECTS[url.searchParams.get("object") ?? ""];
   if (!object) return new NextResponse("Not found", { status: 404 });
   const kind = url.searchParams.get("kind") ?? "template";
-  const defs = await getPropDefs(object);
-  const targets = importTargets(object, defs);
-  const defOf = (t: string) => defs.find((d) => `prop:${d.name}` === t);
+  const [defs, otherDefs] = await Promise.all([getPropDefs(object), getPropDefs(object === "CONTACT" ? "COMPANY" : "CONTACT")]);
+  const targets = importTargets(object, defs, otherDefs);
+  const otherPrefix = object === "CONTACT" ? COMPANY_PROP_PREFIX : CONTACT_PROP_PREFIX;
+  const defOf = (t: string) => (t.startsWith(otherPrefix) ? otherDefs.find((d) => `${otherPrefix}${d.name}` === t) : defs.find((d) => `prop:${d.name}` === t));
   const plural = object === "CONTACT" ? "contacts" : "companies";
 
   let lines: string[];
@@ -45,7 +55,7 @@ export async function GET(req: Request) {
     // Headers are the property labels, so the importer maps them automatically
     lines = [cols.map((c) => csvCell(c.value === "company:name" ? "Company name" : c.value === "company:domain" ? "Company domain" : c.value === "phones" ? "Other phone numbers" : c.label)).join(",")];
     // Owner-type sample cells use the downloader's own email so the sample row imports cleanly
-    lines.push(cols.map((c) => csvCell(defOf(c.value)?.type === "USER" ? (session.user.email ?? "") : sampleValue(defOf(c.value), c.value, object))).join(","));
+    lines.push(cols.map((c) => csvCell(defOf(c.value)?.type === "USER" ? (session.user.email ?? "") : sampleValue(defOf(c.value), c.value, c.value.startsWith(otherPrefix) ? (object === "CONTACT" ? "COMPANY" : "CONTACT") : object))).join(","));
     file = `${plural}-import-template${kind === "full" ? "-all-columns" : ""}.csv`;
   }
   return new NextResponse("﻿" + lines.join("\r\n"), {

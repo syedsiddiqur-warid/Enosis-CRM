@@ -37,17 +37,6 @@ export async function updateProperty(object: CrmObject, id: string, property: st
   }
 }
 
-export async function bulkUpdate(object: CrmObject, ids: string[], property: string, value: unknown): Promise<Result<{ updated: number }>> {
-  try {
-    const user = await requireUser();
-    for (const id of ids) await applyUpdate(object, id, property, value, user.id);
-    revalidate(object);
-    return { ok: true, data: { updated: ids.length } };
-  } catch (e) {
-    return fail(e);
-  }
-}
-
 export async function bulkDelete(object: CrmObject, ids: string[]): Promise<Result<{ deleted: number }>> {
   try {
     const user = await requireUser();

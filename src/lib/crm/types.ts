@@ -148,6 +148,8 @@ export interface ViewSummary {
 export interface SegmentExclusions {
   segments: string[];
   records: string[];
+  /** Leave out companies still in research (and contacts of only those companies). Set on segments made from a list view. */
+  research?: boolean;
 }
 
 export interface SegmentSummary {

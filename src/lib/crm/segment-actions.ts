@@ -4,7 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/auth";
 import { db } from "@/lib/db";
-import { loadQueryContext } from "./context";
+import { loadQueryContext, parseExclusions } from "./context";
 import { OBJECT_LABELS } from "./defaults";
 import { searchWhere } from "./query";
 import { canEditSegment, segmentRecordsWhere } from "./segments";
@@ -58,12 +58,26 @@ async function memberRows(object: CrmObject, segmentId: string, ids: string[], u
   }));
 }
 
-export async function createSegment(object: CrmObject, name: string, type: "ACTIVE" | "STATIC", groups: FilterGroup[] = [], ids: string[] = []): Promise<Result<{ id: string }>> {
+export async function createSegment(
+  object: CrmObject,
+  name: string,
+  type: "ACTIVE" | "STATIC",
+  groups: FilterGroup[] = [],
+  ids: string[] = [],
+  readyOnly = false,
+): Promise<Result<{ id: string }>> {
   try {
     const user = await requireUser();
     if (object === "DEAL") throw new Error("Deal segments arrive with deals");
     const s = await db.segment.create({
-      data: { name: cleanName(name), objectType: object, type, ownerId: user.id, filters: type === "ACTIVE" ? json(cleanGroups(groups, user.id)) : undefined },
+      data: {
+        name: cleanName(name),
+        objectType: object,
+        type,
+        ownerId: user.id,
+        filters: type === "ACTIVE" ? json(cleanGroups(groups, user.id)) : undefined,
+        exclusions: readyOnly ? json({ segments: [], records: [], research: true }) : undefined,
+      },
     });
     if (type === "STATIC" && ids.length) await db.segmentMember.createMany({ data: await memberRows(object, s.id, ids, user.id), skipDuplicates: true });
     await db.auditLog.create({ data: { action: "settings", changes: json({ createdSegment: { id: s.id, name: s.name, type } }), userId: user.id } });
@@ -75,7 +89,7 @@ export async function createSegment(object: CrmObject, name: string, type: "ACTI
 }
 
 /** Active segment from an index view: its quick filters and owner tab apply to every advanced group. */
-export async function createSegmentFromView(object: CrmObject, name: string, systemKey: string | null, state: ViewState): Promise<Result<{ id: string }>> {
+export async function createSegmentFromView(object: CrmObject, name: string, systemKey: string | null, state: ViewState, includeResearch = false): Promise<Result<{ id: string }>> {
   try {
     const user = await requireUser();
     const base = Object.values(state.quick).filter(isActiveCondition);
@@ -89,7 +103,8 @@ export async function createSegmentFromView(object: CrmObject, name: string, sys
         )
       : [{ op: "AND", conditions: base }];
     if (!groups.some((g) => g.conditions.length)) throw new Error("Add a filter first. A segment of every record isn't useful");
-    return createSegment(object, name, "ACTIVE", groups);
+    // Like the list it came from, the segment leaves out companies still in research
+    return createSegment(object, name, "ACTIVE", groups, [], !includeResearch);
   } catch (e) {
     return fail(e);
   }
@@ -107,7 +122,7 @@ export async function updateSegment(
     if (groups && !groups.length) throw new Error("An active segment needs at least one filter");
     let exclusions: SegmentExclusions | undefined;
     if (patch.exclusions) {
-      exclusions = { segments: [...new Set(patch.exclusions.segments.map(String))].filter((x) => x !== id), records: [...new Set(patch.exclusions.records.map(String))] };
+      exclusions = { segments: [...new Set(patch.exclusions.segments.map(String))].filter((x) => x !== id), records: [...new Set(patch.exclusions.records.map(String))], ...(parseExclusions(s.exclusions).research ? { research: true } : {}) };
       if (exclusions.segments.length > 10) throw new Error("Exclude up to 10 segments");
       const others = await db.segment.count({ where: { id: { in: exclusions.segments }, objectType: s.objectType } });
       if (others !== exclusions.segments.length) throw new Error("Excluded segments must be of the same object");

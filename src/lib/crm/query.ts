@@ -3,6 +3,7 @@
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { dayRange, resolveRelative } from "./dates";
+import { outOfResearch } from "./in-research";
 import { isSortable } from "./properties";
 import {
   RELATED_KINDS,
@@ -281,6 +282,8 @@ export function segmentMembershipWhere(object: CrmObject, segmentId: string, ctx
 export function withExclusions(object: CrmObject, base: Where, ex: SegmentExclusions | null | undefined, ctx: QueryContext): Where {
   const and: Where[] = [base];
   if (ex?.records?.length) and.push({ id: { notIn: ex.records } });
+  const ready = ex?.research ? outOfResearch(object) : null;
+  if (ready) and.push(ready);
   if (ex?.segments?.length && (ctx.depth ?? 0) <= MAX_SEGMENT_DEPTH) and.push({ NOT: { OR: ex.segments.map((id) => segmentMembershipWhere(object, id, ctx)) } });
   return and.length === 1 ? base : { AND: and };
 }
@@ -358,8 +361,11 @@ export function searchWhere(object: CrmObject, q: string): Where | null {
   return { name: contains };
 }
 
-export function buildWhere(object: CrmObject, systemKey: string | null, state: ViewState, q: string, ctx: QueryContext): Where {
+/** A list view's filter. Companies still in research (and their contacts) are left out unless `includeResearch`. */
+export function buildWhere(object: CrmObject, systemKey: string | null, state: ViewState, q: string, ctx: QueryContext, includeResearch = false): Where {
   const and: Where[] = [{ deletedAt: null }];
+  const ready = includeResearch ? null : outOfResearch(object);
+  if (ready) and.push(ready);
   if (systemKey === "mine") and.push({ ownerId: ctx.userId });
   if (systemKey === "unassigned") and.push({ ownerId: null });
 

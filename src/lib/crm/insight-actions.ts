@@ -44,11 +44,11 @@ export async function segmentInsights(segmentId: string, draft?: { groups?: Filt
 }
 
 /** Insights for what a contacts / companies list currently shows (view, filters, search). */
-export async function viewInsights(object: CrmObject, systemKey: string | null, state: ViewState, q: string): Promise<Result<Insights>> {
+export async function viewInsights(object: CrmObject, systemKey: string | null, state: ViewState, q: string, includeResearch = false): Promise<Result<Insights>> {
   try {
     const user = await requireUser();
     const ctx = await loadQueryContext(user.id);
-    return { ok: true, data: await computeInsights(object, buildWhere(object, systemKey, state, q, ctx), ctx, await users()) };
+    return { ok: true, data: await computeInsights(object, buildWhere(object, systemKey, state, q, ctx, includeResearch), ctx, await users()) };
   } catch (e) {
     return fail(e);
   }

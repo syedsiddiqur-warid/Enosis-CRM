@@ -26,6 +26,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Button, Input, Select } from "@/components/ui/button";
 import {
+  Checkbox,
   Dialog,
   DialogContent,
   DropdownMenu,
@@ -33,14 +34,10 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
   Tooltip,
 } from "@/components/ui/overlays";
 import {
   bulkDelete,
-  bulkUpdate,
   cloneView,
   createView,
   deleteView,
@@ -63,11 +60,12 @@ import { createSegmentFromView, removeFromSegment } from "@/lib/crm/segment-acti
 import type { ColumnSpec, FilterCondition, FilterGroup, PropDef, ViewState } from "@/lib/crm/types";
 import { isActiveCondition, sameState } from "@/lib/crm/view-state";
 import { cn, toBase64Url } from "@/lib/utils";
-import { CellEditor } from "./cell-editor";
+import { BulkAssignDialog, BulkEditDialog, useBulkRunner, type BulkOutcome } from "@/components/bulk/bulk-tools";
+import { MAX_DIRECT, type BulkTarget } from "@/lib/crm/bulk";
+import { resolveSelection } from "@/lib/crm/bulk-actions";
 import { DataTable } from "./data-table";
 import { CreatePropertyDialog, CreateRecordDialog, EditColumnsDialog, ViewNameDialog } from "./dialogs";
 import { PreviewDrawer } from "./preview-drawer";
-import { PropertyPicker } from "./property-picker";
 import { AdvancedFiltersPanel, QuickFilterBar } from "./quick-filters";
 import { AddToSegmentButton } from "./segment-picker";
 import { ViewTabs } from "./view-tabs";
@@ -91,6 +89,12 @@ export function IndexPage({ data }: { data: IndexData }) {
   const activeView = views.find((v) => v.id === activeViewId)!;
   const [q, setQ] = useState(data.q);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  /** Every record matching the list (all pages) is selected */
+  const [matching, setMatching] = useState<BulkTarget[] | null>(null);
+  const [selectingAll, setSelectingAll] = useState(false);
+  const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const bulk = useBulkRunner(object as "COMPANY" | "CONTACT", labels);
   const [showFilters, setShowFilters] = useState(true);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
@@ -111,7 +115,11 @@ export function IndexPage({ data }: { data: IndexData }) {
     } catch {}
   }, []);
   useEffect(() => setQ(data.q), [data.q]);
-  useEffect(() => setSelected(new Set()), [activeViewId, page, data.q]);
+  const stParam = sp.get("st");
+  useEffect(() => {
+    setSelected(new Set());
+    setMatching(null);
+  }, [activeViewId, page, data.q, stParam, data.includeResearch]);
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 6000);
@@ -200,6 +208,34 @@ export function IndexPage({ data }: { data: IndexData }) {
     return null;
   }
 
+  // ── Bulk changes: the ticked rows, or every record matching the list ──
+  const listObject = object as "COMPANY" | "CONTACT";
+  async function selectAllMatching() {
+    setSelectingAll(true);
+    const res = await resolveSelection(listObject, { systemKey: activeView.systemKey, state, q: data.q, includeResearch: data.includeResearch });
+    setSelectingAll(false);
+    if (!res.ok) return setToast({ message: res.error });
+    setMatching(res.data!.targets);
+    setSelected(new Set(res.data!.targets.map((t) => t.id)));
+  }
+  async function bulkTargets() {
+    if (matching) return matching;
+    const res = await resolveSelection(listObject, { ids: [...selected] });
+    if (!res.ok) {
+      setToast({ message: res.error });
+      return null;
+    }
+    return res.data!.targets;
+  }
+  function bulkDone(out: BulkOutcome) {
+    setSelected(new Set());
+    setMatching(null);
+    const t: Toast = out.batchId ? { message: out.message, undo: async () => void (await bulk.undo(out.batchId!)) } : { message: out.message };
+    setToast(t);
+    if (out.batchId) setLastUndo(t);
+    router.refresh();
+  }
+
   async function runUndo(t: Toast | null) {
     if (!t?.undo) return;
     await t.undo();
@@ -269,7 +305,7 @@ export function IndexPage({ data }: { data: IndexData }) {
   }
 
   async function onCreateSegment(name: string) {
-    const res = await createSegmentFromView(object, name, activeView.systemKey, state);
+    const res = await createSegmentFromView(object, name, activeView.systemKey, state, data.includeResearch);
     if (!res.ok) return res.error;
     router.push(`/segments/${res.data!.id}`);
     return null;
@@ -302,6 +338,14 @@ export function IndexPage({ data }: { data: IndexData }) {
         <span className="text-[13px] text-ink-subtle">
           {total.toLocaleString()} {total === 1 ? labels.singular : labels.plural}
         </span>
+        {(data.inResearch > 0 || data.includeResearch) && (
+          <Tooltip content={object === "CONTACT" ? "People whose companies are still in the Research Queue are hidden until a company is ready to call" : "Companies still in the Research Queue are hidden until they are ready to call"}>
+            <label className="ml-2 flex cursor-pointer items-center gap-1.5 text-[13px] text-ink-muted">
+              <Checkbox checked={data.includeResearch} onCheckedChange={(v) => nav({ research: v === true ? "1" : null, page: null })} />
+              Include {object === "CONTACT" ? "contacts of companies" : "companies"} in research ({data.inResearch.toLocaleString()})
+            </label>
+          </Tooltip>
+        )}
         <div className="ml-auto flex items-center gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -341,18 +385,23 @@ export function IndexPage({ data }: { data: IndexData }) {
       {selected.size > 0 ? (
         <BulkBar
           count={selected.size}
-          defs={defs}
-          groups={data.groups}
-          users={users}
-          exportHref={`${exportHref}&ids=${[...selected].join(",")}`}
-          onClear={() => setSelected(new Set())}
-          onUpdate={async (prop, value) => {
-            const ids = [...selected];
-            const res = await bulkUpdate(object, ids, prop, value);
-            if (!res.ok) return setToast({ message: res.error });
-            setToast({ message: `Updated ${res.data!.updated} ${res.data!.updated === 1 ? labels.singular : labels.plural}` });
-            router.refresh();
+          large={selected.size > MAX_DIRECT}
+          exportHref={matching ? exportHref : `${exportHref}&ids=${[...selected].join(",")}`}
+          selectAll={
+            matching ? (
+              <span className="text-ink-muted">All matching {labels.plural} are selected</span>
+            ) : total > selected.size && rows.length > 0 && rows.every((r) => selected.has(r.id)) ? (
+              <button className="text-link hover:underline" disabled={selectingAll} onClick={selectAllMatching}>
+                {selectingAll ? "Selecting…" : `Select all ${total.toLocaleString()} matching`}
+              </button>
+            ) : null
+          }
+          onClear={() => {
+            setSelected(new Set());
+            setMatching(null);
           }}
+          onAssign={() => setBulkAssignOpen(true)}
+          onEdit={() => setBulkEditOpen(true)}
           onDelete={() => setConfirmDelete(true)}
           createTasks={
             <CreateTasksButton
@@ -607,6 +656,34 @@ export function IndexPage({ data }: { data: IndexData }) {
       </div>
 
       {/* Overlays */}
+      <BulkAssignDialog
+        open={bulkAssignOpen}
+        onOpenChange={setBulkAssignOpen}
+        count={selected.size}
+        fields={defs
+          .filter((d) => d.type === "USER" && !d.isReadOnly && !d.isVirtual)
+          .sort((a, b) => Number(b.name === "ownerId") - Number(a.name === "ownerId"))
+          .map((d) => ({ name: d.name, label: d.label }))}
+        users={users}
+        canByZone={defs.some((d) => d.name === "timeZone")}
+        loadTargets={bulkTargets}
+        onApply={async (field, plan, targets) =>
+          bulkDone(await bulk.run(`Assigning ${field.label.toLowerCase()}`, targets.map((t) => ({ id: t.id, changes: { [field.name]: plan.get(t.id) ?? null } }))))
+        }
+      />
+      <BulkEditDialog
+        open={bulkEditOpen}
+        onOpenChange={setBulkEditOpen}
+        count={selected.size}
+        defs={defs}
+        groups={data.groups}
+        users={users}
+        onApply={async (changes, summary) => {
+          const targets = await bulkTargets();
+          if (targets) bulkDone(await bulk.run(`Setting ${summary}`, targets.map((t) => ({ id: t.id, changes }))));
+        }}
+      />
+      {bulk.dialog}
       <ViewInsightsDrawer
         open={insightsOpen}
         onOpenChange={setInsightsOpen}
@@ -614,6 +691,7 @@ export function IndexPage({ data }: { data: IndexData }) {
         systemKey={activeView.systemKey}
         state={state}
         q={data.q}
+        includeResearch={data.includeResearch}
         onDrill={(c) => {
           setInsightsOpen(false);
           onQuickChange(c.property, c);
@@ -730,98 +808,55 @@ export function pageNumbers(page: number, count: number): (number | null)[] {
 
 function BulkBar({
   count,
-  defs,
-  groups,
-  users,
+  large,
   exportHref,
+  selectAll,
   onClear,
-  onUpdate,
+  onAssign,
+  onEdit,
   onDelete,
   addToSegment,
   createTasks,
 }: {
   count: number;
-  defs: PropDef[];
-  groups: { name: string; label: string }[];
-  users: IndexData["users"];
+  /** Over MAX_DIRECT: actions that send every id at once are switched off */
+  large: boolean;
   exportHref: string;
+  selectAll: React.ReactNode;
   onClear: () => void;
-  onUpdate: (property: string, value: unknown) => Promise<void>;
+  onAssign: () => void;
+  onEdit: () => void;
   onDelete: () => void;
   addToSegment: React.ReactNode;
   createTasks: React.ReactNode;
 }) {
-  const [assignOpen, setAssignOpen] = useState(false);
-  const [editOpen, setEditOpen] = useState(false);
-  const [editDef, setEditDef] = useState<PropDef | null>(null);
-  const ownerDef = defs.find((d) => d.name === "ownerId");
   return (
-    <div className="flex items-center gap-1 bg-[#e5f5f8] px-6 py-2.5 text-[13px]">
-      <span className="mr-3 font-medium">{count} selected</span>
-      {ownerDef && (
-        <Popover open={assignOpen} onOpenChange={setAssignOpen}>
-          <PopoverTrigger asChild>
-            <Button size="sm" variant="ghost" className="text-link">
-              <UserPlus /> Assign
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent>
-            <CellEditor
-              def={ownerDef}
-              value={null}
-              users={users}
-              onCancel={() => setAssignOpen(false)}
-              onSave={async (v) => {
-                setAssignOpen(false);
-                await onUpdate("ownerId", v);
-              }}
-            />
-          </PopoverContent>
-        </Popover>
-      )}
-      <Popover
-        open={editOpen}
-        onOpenChange={(o) => {
-          setEditOpen(o);
-          if (!o) setEditDef(null);
-        }}
-      >
-        <PopoverTrigger asChild>
-          <Button size="sm" variant="ghost" className="text-link">
-            <Pencil /> Edit
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent>
-          {editDef ? (
-            <div>
-              <div className="border-b border-line px-3 py-2 text-[12px] font-semibold">Set {editDef.label} for {count} records</div>
-              <CellEditor
-                def={editDef}
-                value={null}
-                users={users}
-                onCancel={() => setEditDef(null)}
-                onSave={async (v) => {
-                  setEditOpen(false);
-                  setEditDef(null);
-                  await onUpdate(editDef.name, v);
-                }}
-              />
-            </div>
-          ) : (
-            <PropertyPicker defs={defs} groups={groups} exclude={(d) => d.isReadOnly || !!d.isVirtual} onPick={setEditDef} />
-          )}
-        </PopoverContent>
-      </Popover>
-      {addToSegment}
-      {createTasks}
+    <div className="flex flex-wrap items-center gap-1 bg-[#e5f5f8] px-6 py-2.5 text-[13px]">
+      <span className="mr-1 font-medium">{count.toLocaleString()} selected</span>
+      {selectAll && <span className="mr-3">{selectAll}</span>}
+      <Button size="sm" variant="ghost" className="text-link" onClick={onAssign}>
+        <UserPlus /> Assign
+      </Button>
+      <Button size="sm" variant="ghost" className="text-link" onClick={onEdit}>
+        <Pencil /> Edit
+      </Button>
+      {!large && addToSegment}
+      {!large && createTasks}
       <Button size="sm" variant="ghost" className="text-link" asChild>
         <a href={exportHref}>
           <Download /> Export
         </a>
       </Button>
-      <Button size="sm" variant="ghost" className="text-danger" onClick={onDelete}>
-        <Trash2 /> Delete
-      </Button>
+      {!large && (
+        <Button size="sm" variant="ghost" className="text-danger" onClick={onDelete}>
+          <Trash2 /> Delete
+        </Button>
+      )}
+      {large && (
+        <Tooltip content={`Segments, campaigns, tasks and delete work on up to ${MAX_DIRECT.toLocaleString()} records at a time. To keep this whole list, save the view as a segment; to call it, use Handover.`}>
+          <span className="ml-2 text-[12px] text-ink-subtle">More actions under {MAX_DIRECT.toLocaleString()} records</span>
+        </Tooltip>
+      )}
       <Button size="sm" variant="ghost" className="ml-auto" onClick={onClear}>
         Clear selection
       </Button>
