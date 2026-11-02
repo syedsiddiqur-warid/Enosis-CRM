@@ -988,6 +988,23 @@ model Integration {
   updatedAt DateTime  @updatedAt
 }
 
+// Access keys for the intake API (POST /api/intake/companies). Only a SHA-256 hash of the key is stored.
+model ApiKey {
+  id                String    @id @default(cuid())
+  name              String // which tool uses it, e.g. "Apollo"
+  prefix            String // the first characters, so people can tell keys apart
+  hash              String    @unique
+  // Applied to every company the key sends in
+  source            String? // lead source tag
+  researcherIds     String[]  @default([]) // new companies are spread evenly across these researchers
+  addMissingOptions Boolean   @default(true)
+  createdById       String?
+  lastUsedAt        DateTime?
+  useCount          Int       @default(0)
+  revokedAt         DateTime?
+  createdAt         DateTime  @default(now())
+}
+
 model EnrichmentRun {
   id        String   @id @default(cuid())
   provider  String

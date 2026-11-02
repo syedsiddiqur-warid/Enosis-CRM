@@ -20,6 +20,7 @@ const SECTIONS: { title: string; items: { href: string; label: string; later?: s
       { href: "/settings/lists", label: "Dropdown lists & follow-ups" },
       { href: "/settings/import", label: "Import & templates" },
       { href: "/settings/integrations", label: "Integrations" },
+      { href: "/settings/api", label: "Intake API" },
     ],
   },
   {

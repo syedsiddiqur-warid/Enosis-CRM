@@ -35,12 +35,17 @@ const SECTIONS = [
       { href: "/segments", label: "Segments", icon: ListFilter },
     ],
   },
+  // In the order work flows: research → handover, then campaigns → calling → follow-up
+  {
+    title: "Research",
+    items: [
+      { href: "/research", label: "Research Queue", icon: FlaskConical },
+      { href: "/handover", label: "Handover", icon: ArrowRightLeft },
+    ],
+  },
   {
     title: "Sales",
     items: [
-      // In the order work flows: research → handover → campaigns → calling → follow-up
-      { href: "/research", label: "Research Queue", icon: FlaskConical },
-      { href: "/handover", label: "Handover", icon: ArrowRightLeft },
       { href: "/campaigns", label: "Campaigns", icon: Megaphone },
       { href: "/prospecting", label: "Prospecting", icon: PhoneCall },
       { href: "/follow-ups", label: "Follow-ups", icon: Target },
