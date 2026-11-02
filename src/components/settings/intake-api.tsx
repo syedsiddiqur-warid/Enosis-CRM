@@ -287,7 +287,7 @@ export function IntakeApiSettings({
             Headers: <code className="font-mono">Authorization: Bearer &lt;key&gt;</code> (or <code className="font-mono">X-API-Key</code>) and <code className="font-mono">Content-Type: application/json</code>.
           </li>
           <li>
-            Body: one company, an array of companies, or <code className="font-mono">{"{ companies: [...] }"}</code> with up to 500 companies. <code className="font-mono">batch</code> and{" "}
+            Body: one company, an array of companies, or <code className="font-mono">{"{ companies: [...] }"}</code> with up to 50 companies (send larger lists in several requests). <code className="font-mono">batch</code> and{" "}
             <code className="font-mono">source</code> are optional; without a batch, each day gets its own (e.g. &quot;2026-11-02 API Apollo&quot;).
           </li>
           <li>

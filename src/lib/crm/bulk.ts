@@ -1,7 +1,8 @@
 // Bulk changes: shared by the list pages (client) and bulk-actions.ts (server).
 
-/** Records per request when a bulk change runs, so thousands of records never hit a request limit or timeout. */
-export const BULK_CHUNK = 200;
+/** Records per request when a bulk change runs. Each record takes several database calls, and hosted functions
+ *  (Netlify) stop after about 10 seconds, so keep this small; thousands of records simply take more requests. */
+export const BULK_CHUNK = 50;
 /** Most records one "select all matching" can pick up. */
 export const MAX_SELECTION = 50000;
 /** Above this, actions that send every id at once (segments, campaigns, tasks, delete) are switched off. */
