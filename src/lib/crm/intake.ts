@@ -8,7 +8,7 @@ import { runRows, type ImportRow, type JobMapping } from "./import-core";
 import { CONTACT_PROP_PREFIX, DYN_CALLER_NOTES, DYN_DESCRIPTION, importTargets, suggestTarget, type ImportOptions, type ImportRowResult, type ImportTarget } from "./import-shared";
 import { getPropDefs } from "./properties";
 
-/** Per request: each company takes many database calls, and hosted functions (Netlify) stop after about 10 seconds */
+/** Per request: each company takes many database calls, and serverless functions often stop after about 10 seconds */
 export const MAX_COMPANIES = 50;
 export const KEY_PREFIX = "ecrm_";
 

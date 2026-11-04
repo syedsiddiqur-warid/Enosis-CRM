@@ -13,7 +13,7 @@
 generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["fullTextSearchPostgres"]
-  // native: this machine and the build image; rhel-openssl-3.0.x: Netlify Functions (AWS Lambda)
+  // native: this machine and the build image; rhel-openssl-3.0.x: serverless hosts on AWS Lambda
   binaryTargets   = ["native", "rhel-openssl-3.0.x"]
 }
 

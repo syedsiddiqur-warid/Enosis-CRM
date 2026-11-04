@@ -14,7 +14,6 @@
     "db:reset": "prisma migrate reset --force",
     "db:studio": "prisma studio",
     "postinstall": "prisma generate",
-    "build:netlify": "node scripts/netlify-build.mjs",
     "db:seed:prod": "prisma db seed -- --no-sample-data",
     "db:sync": "tsx scripts/sync-metadata.ts"
   },
@@ -47,7 +46,6 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
-    "@netlify/plugin-nextjs": "^5.16.5",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

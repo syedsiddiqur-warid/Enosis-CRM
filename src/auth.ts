@@ -24,7 +24,7 @@ class LockedSignin extends CredentialsSignin {
 /** AUTH_SECRET if set; otherwise a key derived from the database connection, which is already a secret on the server. */
 function authSecret() {
   if (process.env.AUTH_SECRET) return process.env.AUTH_SECRET;
-  const url = process.env.DATABASE_URL || process.env.NETLIFY_DB_URL || process.env.NETLIFY_DATABASE_URL_UNPOOLED || process.env.NETLIFY_DATABASE_URL;
+  const url = process.env.DATABASE_URL;
   return url ? createHash("sha256").update(`enosis-crm-auth:${url}`).digest("base64url") : undefined;
 }
 

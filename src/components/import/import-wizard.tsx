@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { DynamicsReview, type ReviewItem } from "./dynamics-review";
 
 const MAX_ROWS = 20000;
-// Small batches keep each request well inside serverless time limits (Netlify functions: ~10 s): every contact row
+// Small batches keep each request well inside serverless time limits (often ~10 s): every contact row
 // finds or creates its company, phones and timeline entries, which adds up on a hosted database
 const VALIDATE_CHUNK = 25;
 const IMPORT_CHUNK = 10;
